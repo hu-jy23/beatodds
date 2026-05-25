@@ -72,6 +72,7 @@ class EvidenceRetriever:
                         continue
 
                     all_items.append(EvidenceItem(
+                        query=query,
                         title=r.get("title", ""),
                         summary=r.get("content", "")[:500],
                         url=url,

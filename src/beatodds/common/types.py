@@ -120,6 +120,7 @@ class ResolutionFeatures(BaseModel):
 # ---------------------------------------------------------------------------
 
 class EvidenceItem(BaseModel):
+    query: str = ""
     title: str
     summary: str
     url: str

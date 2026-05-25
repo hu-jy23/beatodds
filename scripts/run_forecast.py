@@ -22,6 +22,22 @@ from beatodds.evidence.retriever import EvidenceRetriever
 from beatodds.resolution_parser.parser import ResolutionParser
 from beatodds.scanner.scanner import Scanner
 
+_SPORTS_KEYWORDS = [
+    "world cup", "fifa", "nba", "nfl", "nhl", "mlb", "premier league",
+    "bundesliga", "la liga", "serie a", "champions league", "wimbledon",
+    "super bowl", "stanley cup", "march madness", "ncaa",
+    "cavaliers", "knicks", "celtics", "lakers", "warriors", "heat",
+    "cricket", "tennis", "golf", "formula 1", "formula one", "ufc",
+]
+
+
+def _is_sports(question: str, category: str) -> bool:
+    q = question.lower()
+    cat = category.lower()
+    if "sport" in cat or "soccer" in cat or "football" in cat or "basketball" in cat:
+        return True
+    return any(kw in q for kw in _SPORTS_KEYWORDS)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -30,6 +46,12 @@ def main():
                         help="Scan and parse only; skips Tavily retrieval and final forecasting")
     parser.add_argument("--backtest", action="store_true",
                         help="Enable strict temporal integrity check (for replay/backtest mode)")
+    parser.add_argument("--exclude-sports", action="store_true",
+                        help="Skip World Cup / NBA and other sports markets")
+    parser.add_argument("--min-prob", type=float, default=0.0,
+                        help="Minimum market midpoint probability (default 0 = no filter)")
+    parser.add_argument("--max-prob", type=float, default=1.0,
+                        help="Maximum market midpoint probability (default 1 = no filter)")
     args = parser.parse_args()
 
     # --- Scan ---
@@ -38,6 +60,23 @@ def main():
     # Filter to tradeable (tight spread) markets for forecasting
     tradeable = [c for c in candidates if c.snapshot.spread < 0.05]
     logger.info(f"Scanner: {len(candidates)} candidates, {len(tradeable)} tradeable (spread<5¢)")
+
+    if args.exclude_sports:
+        tradeable = [
+            c for c in tradeable
+            if not _is_sports(c.market.question, c.market.category)
+        ]
+        logger.info(f"After excluding sports: {len(tradeable)} candidates")
+
+    if args.min_prob > 0 or args.max_prob < 1.0:
+        tradeable = [
+            c for c in tradeable
+            if args.min_prob <= c.snapshot.midpoint <= args.max_prob
+        ]
+        logger.info(
+            f"After prob filter [{args.min_prob:.2f}, {args.max_prob:.2f}]: "
+            f"{len(tradeable)} candidates"
+        )
 
     targets = tradeable[:args.top]
     if not targets:
