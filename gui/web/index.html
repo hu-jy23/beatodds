@@ -27,7 +27,7 @@
         <div class="market-list" id="marketList"></div>
       </aside>
 
-      <main class="main-col">
+      <main class="main-col panel-zone" data-zone="middle">
         <header class="topbar">
           <div class="topbar-title-row">
             <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show market list">&gt;</button>
@@ -47,7 +47,7 @@
           </div>
         </header>
 
-        <section class="analysis-panel">
+        <section class="analysis-panel draggable-panel" data-panel-id="analysis">
           <div class="analysis-head">
             <div>
               <p class="eyebrow">Analysis</p>
@@ -64,28 +64,17 @@
           </div>
         </section>
 
-        <section class="detail-block topic-detail-block">
+        <section class="detail-block topic-detail-block draggable-panel" data-panel-id="live-price">
           <div class="panel-head tight">
             <h3>Live Price</h3>
             <span id="snapshotTime">--</span>
           </div>
-          <canvas id="priceChart" width="720" height="220"></canvas>
+          <canvas id="priceChart" width="720" height="260"></canvas>
           <div class="quote-grid" id="quoteGrid"></div>
           <div class="data-status" id="snapshotStatus"></div>
         </section>
 
-        <section class="detail-block topic-detail-block">
-          <div class="panel-head tight">
-            <h3>Statistics</h3>
-            <span>current dataset context</span>
-          </div>
-          <div class="topic-chart-grid">
-            <canvas id="statsChart" width="360" height="180"></canvas>
-            <canvas id="edgeChart" width="360" height="180"></canvas>
-          </div>
-        </section>
-
-        <section class="topic-panel">
+        <section class="topic-panel draggable-panel" data-panel-id="topic-brief">
           <div class="panel-head tight">
             <h3>Current Topic Brief</h3>
             <span id="topicStatus">selected market only</span>
@@ -94,7 +83,7 @@
           <div class="message-list compact" id="topicMessages"></div>
         </section>
 
-        <section class="dialog-panel">
+        <section class="dialog-panel draggable-panel" data-panel-id="dialog">
           <div class="panel-head">
             <div>
               <p class="eyebrow">Dialog</p>
@@ -112,7 +101,7 @@
           <div class="timeline" id="timeline"></div>
         </section>
 
-        <section class="detail-block topic-detail-block">
+        <section class="detail-block topic-detail-block draggable-panel" data-panel-id="related-news">
           <div class="panel-head tight">
             <h3>Related News</h3>
             <span id="newsStatus">manual update fills this list</span>
@@ -121,7 +110,7 @@
         </section>
       </main>
 
-      <aside class="rail right-rail" id="rightRail">
+      <aside class="rail right-rail panel-zone" id="rightRail" data-zone="right">
         <div class="rail-head">
           <div>
             <p class="eyebrow">Market</p>
@@ -129,22 +118,38 @@
           </div>
           <button class="icon-btn" id="hideRight" title="Hide console">&gt;</button>
         </div>
-        <section class="metric-strip" id="metricStrip"></section>
-        <section class="detail-block console-intro">
+        <section class="metric-strip draggable-panel" id="metricStrip" data-panel-id="metrics"></section>
+        <section class="detail-block console-intro draggable-panel" data-panel-id="operator-summary">
           <div class="panel-head tight">
             <h3>Operator Summary</h3>
             <span>aggregate state</span>
           </div>
           <div class="mini-stats" id="consoleSummary"></div>
         </section>
-        <section class="detail-block report-block">
+        <section class="detail-block topic-detail-block draggable-panel" data-panel-id="statistics">
+          <div class="panel-head tight">
+            <h3>Statistics</h3>
+            <span>current dataset context</span>
+          </div>
+          <div class="topic-chart-grid">
+            <div class="chart-card">
+              <canvas id="statsChart" width="360" height="180"></canvas>
+              <p class="chart-note">Category mix across the currently loaded market list.</p>
+            </div>
+            <div class="chart-card">
+              <canvas id="edgeChart" width="360" height="180"></canvas>
+              <p class="chart-note">Stored forecast edges; green favors YES, red favors NO.</p>
+            </div>
+          </div>
+        </section>
+        <section class="detail-block report-block draggable-panel" data-panel-id="special-report">
           <div class="panel-head tight">
             <h3>Special Report</h3>
             <span>priority alerts</span>
           </div>
           <div class="special-list" id="specialReport"></div>
         </section>
-        <section class="detail-block console-panel">
+        <section class="detail-block console-panel draggable-panel" data-panel-id="tracking-console">
           <div class="panel-head tight">
             <h3>Tracking Console</h3>
             <span id="trackingStatus">--</span>
@@ -152,14 +157,14 @@
           <div class="mini-stats" id="trackingStats"></div>
           <canvas id="trackedChart" width="420" height="150"></canvas>
         </section>
-        <section class="detail-block console-panel">
+        <section class="detail-block console-panel draggable-panel" data-panel-id="action-report">
           <div class="panel-head tight">
             <h3>Action Report</h3>
             <span id="actionStatus">--</span>
           </div>
           <div class="report-list" id="actionReport"></div>
         </section>
-        <section class="detail-block message-panel">
+        <section class="detail-block message-panel draggable-panel" data-panel-id="generated-messages">
           <div class="panel-head tight">
             <h3>Generated Messages</h3>
             <span>follow-up drafts</span>

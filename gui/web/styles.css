@@ -53,7 +53,8 @@ button:disabled {
   .market-item,
   .report-item,
   .message-item,
-  .timeline-item {
+  .timeline-item,
+  .draggable-panel {
     transition:
       transform 140ms ease,
       box-shadow 140ms ease,
@@ -468,6 +469,45 @@ textarea:focus {
     background-color 160ms ease;
 }
 
+.draggable-panel {
+  position: relative;
+  resize: vertical;
+  min-height: 96px;
+  max-height: 720px;
+  overflow: auto;
+}
+
+.draggable-panel::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid #c8d4dc;
+  border-bottom: 2px solid #c8d4dc;
+  pointer-events: none;
+}
+
+.draggable-panel.dragging {
+  opacity: 0.58;
+  transform: scale(0.992);
+}
+
+.draggable-panel.drag-target {
+  outline: 2px solid rgba(47, 109, 246, 0.24);
+}
+
+.draggable-panel .panel-head,
+.analysis-head {
+  cursor: grab;
+}
+
+.draggable-panel:active .panel-head,
+.analysis-panel:active .analysis-head {
+  cursor: grabbing;
+}
+
 .analysis-panel.stance-observe {
   border-left-color: var(--amber);
   background: #fffbf3;
@@ -704,8 +744,20 @@ textarea:focus {
 
 .topic-chart-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 10px;
+}
+
+.chart-card {
+  display: grid;
+  gap: 6px;
+}
+
+.chart-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .detail-block.console-panel,

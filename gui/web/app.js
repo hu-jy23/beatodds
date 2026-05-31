@@ -5,6 +5,7 @@ const app = {
   search: "",
   updating: false,
   pendingUpdateAll: false,
+  dragPanel: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -412,7 +413,7 @@ function drawPriceChart(canvas, points) {
   const ctx = setupCanvas(canvas);
   clearChart(ctx, canvas, "Market vs fair probability");
   if (!points.length) return;
-  const pad = { left: 48, right: 18, top: 34, bottom: 38 };
+  const pad = { left: 58, right: 66, top: 48, bottom: 58 };
   const w = ctx.logicalWidth;
   const h = ctx.logicalHeight;
   const values = points.flatMap((p) => [p.market, p.fair]).filter((v) => v !== null && v !== undefined);
@@ -548,13 +549,15 @@ function drawAxes(ctx, points, min, max, pad, w, h) {
     ctx.fillText(`${(value * 100).toFixed(1)}%`, x0 - 6, y);
   });
 
-  ctx.textAlign = "center";
   ctx.textBaseline = "top";
   const first = points[0]?.at || "start";
   const last = points[points.length - 1]?.at || "now";
+  ctx.textAlign = "left";
   ctx.fillText(String(first).slice(0, 12), x0, y0 + 8);
+  ctx.textAlign = "right";
   ctx.fillText(String(last).slice(0, 12), x1, y0 + 8);
-  ctx.fillText("time", (x0 + x1) / 2, y0 + 22);
+  ctx.textAlign = "center";
+  ctx.fillText("time", (x0 + x1) / 2, y0 + 30);
 
   ctx.save();
   ctx.translate(13, (y0 + y1) / 2);
@@ -584,10 +587,14 @@ function drawLine(ctx, values, min, max, pad, w, h, color) {
 }
 
 function drawLegend(ctx, items, w) {
+  const itemWidth = 66;
+  const start = Math.max(150, w - items.length * itemWidth - 18);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
   items.forEach(([label, color], idx) => {
-    const x = w - 130 + idx * 62;
+    const x = start + idx * itemWidth;
     ctx.fillStyle = color;
-    ctx.fillRect(x, 14, 8, 8);
+    ctx.fillRect(x, 18, 8, 8);
     ctx.fillStyle = "#61707d";
     ctx.font = "11px system-ui";
     ctx.fillText(label, x + 12, 22);
@@ -671,6 +678,88 @@ function bindEvents() {
     await post("/api/note", { condition_id: app.selectedId, text });
   });
   window.addEventListener("resize", renderCharts);
+  initPanelInteractions();
+}
+
+function initPanelInteractions() {
+  restorePanelOrder();
+  document.querySelectorAll(".draggable-panel").forEach((panel) => {
+    panel.setAttribute("draggable", "true");
+    panel.addEventListener("dragstart", (event) => {
+      if (isInteractiveTarget(event.target)) {
+        event.preventDefault();
+        return;
+      }
+      app.dragPanel = panel;
+      panel.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", panel.dataset.panelId || "");
+    });
+    panel.addEventListener("dragend", () => {
+      panel.classList.remove("dragging");
+      app.dragPanel = null;
+      savePanelOrder();
+      renderCharts();
+    });
+  });
+
+  document.querySelectorAll(".panel-zone").forEach((zone) => {
+    zone.addEventListener("dragover", (event) => {
+      if (!app.dragPanel || app.dragPanel.parentElement !== zone) return;
+      event.preventDefault();
+      const after = panelAfterPointer(zone, event.clientY);
+      if (after) zone.insertBefore(app.dragPanel, after);
+      else zone.appendChild(app.dragPanel);
+    });
+  });
+
+  if ("ResizeObserver" in window) {
+    const resizeObserver = new ResizeObserver(() => renderCharts());
+    document.querySelectorAll(".draggable-panel").forEach((panel) => resizeObserver.observe(panel));
+  }
+}
+
+function isInteractiveTarget(target) {
+  return !!target.closest("button, input, textarea, a, canvas, label");
+}
+
+function panelAfterPointer(zone, y) {
+  const candidates = [...zone.querySelectorAll(".draggable-panel:not(.dragging)")];
+  return candidates.reduce(
+    (closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) return { offset, element: child };
+      return closest;
+    },
+    { offset: Number.NEGATIVE_INFINITY, element: null },
+  ).element;
+}
+
+function savePanelOrder() {
+  const order = {};
+  document.querySelectorAll(".panel-zone").forEach((zone) => {
+    order[zone.dataset.zone] = [...zone.querySelectorAll(".draggable-panel")]
+      .map((panel) => panel.dataset.panelId)
+      .filter(Boolean);
+  });
+  localStorage.setItem("beatodds.panelOrder", JSON.stringify(order));
+}
+
+function restorePanelOrder() {
+  let order = {};
+  try {
+    order = JSON.parse(localStorage.getItem("beatodds.panelOrder") || "{}");
+  } catch {
+    order = {};
+  }
+  document.querySelectorAll(".panel-zone").forEach((zone) => {
+    const ids = order[zone.dataset.zone] || [];
+    ids.forEach((id) => {
+      const panel = zone.querySelector(`.draggable-panel[data-panel-id="${CSS.escape(id)}"]`);
+      if (panel) zone.appendChild(panel);
+    });
+  });
 }
 
 async function runUpdate(scope, options = {}) {

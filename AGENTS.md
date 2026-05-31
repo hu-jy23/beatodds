@@ -83,6 +83,11 @@ As of 2026-05-25:
   run the LLM forecast when a live CLOB snapshot is available, persist the run
   to the workflow DB, and show related news in the middle rail. The current
   `Update all` endpoint is bounded to a small batch for cost/runtime control.
+- GUI middle and right rail panels are now locally reorderable with drag and
+  drop and moderately vertically resizable. Panel order is stored in browser
+  `localStorage`. The statistics chart grid lives in the right rail with
+  per-subplot notes, while the price chart has explicit axes and in-canvas
+  legend/label placement to avoid clipping.
 - Current uncommitted development includes:
   - `scripts/run_forecast.py`: sports and probability filters.
   - `scripts/run_batch_eval.py`: batch forecasting, stored records, manual
