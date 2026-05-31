@@ -48,6 +48,34 @@ As of 2026-05-25:
 - Submodule conversion was verified in the `odds` conda env with
   `uv sync`, `uv sync --extra dev`, `uv run ruff check .`, and
   `uv run pytest -q`.
+- As of 2026-05-31, the missing `src/beatodds/data/` live data layer was
+  restored with Gamma API reads, CLOB v2 snapshots, and an incremental market
+  indexer. `.gitignore` now ignores only root `/data/` so source code under
+  `src/beatodds/data/` remains trackable.
+- A README full pipeline run in the `odds` conda env succeeded:
+  `backfill_markets.py --incremental`, `run_scanner.py --top 10`,
+  `run_scanner.py --top 10 --complete-groups`, and
+  `run_forecast.py --top 5`.
+- A local GUI now lives under root `gui/` and is launched with
+  `uv run scripts/run_gui.py --host 127.0.0.1 --port 8765`. It reads local
+  DuckDB files, serves a three-column collapsible operator console, and stores
+  GUI memory/history in ignored `data/gui_state.json`.
+- GUI scroll behavior is rail-contained: page/body scrolling is disabled and
+  left, middle, and right columns scroll independently. Middle actions now
+  persist observable state for tracked markets, follow-ups, reviews, generated
+  message drafts, and simulated paper deals.
+- As of 2026-05-31, GUI action state is topic-scoped: dialog/action logs,
+  generated messages, simulated paper deals, follow-ups, and reviews are
+  separated per selected market and can be cleared per topic or globally.
+  Aggregate Tracking Console, Action Report, Generated Messages, and Special
+  Report panels live in the right rail; the middle rail is reserved for the
+  selected topic's analysis, current-topic brief, and notes.
+- GUI rail ownership was refined on 2026-05-31: left rail is the topic list,
+  middle rail is selected-topic information including analysis, live price,
+  statistics, evidence, and notes, and the wider right rail is aggregate console
+  state including metric strip, operator summary, reports, and generated
+  messages. Chart sizing uses fixed logical canvas heights to avoid growth when
+  switching topics.
 - Current uncommitted development includes:
   - `scripts/run_forecast.py`: sports and probability filters.
   - `scripts/run_batch_eval.py`: batch forecasting, stored records, manual

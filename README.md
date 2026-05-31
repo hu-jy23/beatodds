@@ -241,7 +241,14 @@ uv run scripts/run_forecast.py --top 5 --dry-run
 
 # 3b. 回测模式（开启严格时间完整性校验）
 uv run scripts/run_forecast.py --top 5 --backtest
+
+# 4. 本地 GUI（市场选择、分析建议、记忆/历史、动态图表）
+uv run scripts/run_gui.py --host 127.0.0.1 --port 8765
 ```
+
+打开浏览器访问 `http://127.0.0.1:8765`。GUI 使用 `data/beatodds.duckdb`
+和 `data/eval.duckdb` 读取市场与评估状态，并将界面记忆、跟踪列表、操作历史
+和纸面交易记录保存在 `data/gui_state.json`。
 
 ---
 
