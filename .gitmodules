@@ -1,0 +1,24 @@
+[submodule "ref/agent-benchmark/FutureShow"]
+	path = ref/agent-benchmark/FutureShow
+	url = git@github.com:HKUDS/FutureShow.git
+[submodule "ref/agent-benchmark/prediction-market-agent-tooling"]
+	path = ref/agent-benchmark/prediction-market-agent-tooling
+	url = git@github.com:gnosis/prediction-market-agent-tooling.git
+[submodule "ref/data-backtesting/prediction-market-analysis"]
+	path = ref/data-backtesting/prediction-market-analysis
+	url = git@github.com:Jon-Becker/prediction-market-analysis.git
+[submodule "ref/data-backtesting/prediction-market-backtesting"]
+	path = ref/data-backtesting/prediction-market-backtesting
+	url = git@github.com:evan-kolberg/prediction-market-backtesting.git
+[submodule "ref/official-polymarket/agents"]
+	path = ref/official-polymarket/agents
+	url = git@github.com:Polymarket/agents.git
+[submodule "ref/official-polymarket/py-clob-client-v2"]
+	path = ref/official-polymarket/py-clob-client-v2
+	url = git@github.com:Polymarket/py-clob-client-v2.git
+[submodule "ref/strategy-execution/polymarket-arbitrage"]
+	path = ref/strategy-execution/polymarket-arbitrage
+	url = git@github.com:ImMike/polymarket-arbitrage.git
+[submodule "ref/strategy-execution/polymarket-paper-trader"]
+	path = ref/strategy-execution/polymarket-paper-trader
+	url = git@github.com:agent-next/polymarket-paper-trader.git

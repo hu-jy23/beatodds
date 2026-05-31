@@ -40,6 +40,14 @@ As of 2026-05-25:
 
 - GitHub remote: `https://github.com/hu-jy23/beatodds.git`, private.
 - Base committed state on `master`: initial BeatOdds prototype.
+- As of 2026-05-31, `ref/` reference repositories are real git submodules
+  using SSH GitHub URLs in `.gitmodules`; initialize fresh clones with
+  `git submodule update --init --recursive`.
+- `py-clob-client-v2` is resolved from
+  `ref/official-polymarket/py-clob-client-v2` in `pyproject.toml`.
+- Submodule conversion was verified in the `odds` conda env with
+  `uv sync`, `uv sync --extra dev`, `uv run ruff check .`, and
+  `uv run pytest -q`.
 - Current uncommitted development includes:
   - `scripts/run_forecast.py`: sports and probability filters.
   - `scripts/run_batch_eval.py`: batch forecasting, stored records, manual
@@ -54,8 +62,9 @@ As of 2026-05-25:
   - `tests/test_workflow_store.py`: workflow DB roundtrip tests.
   - `docs/current_functionality.md`: current abilities, file map, workflow DB
     schema, local DB counts, and known gaps.
-  - `README.md`: local `ref/` link wording.
-  - `ref/`: lightweight README pointer tree only; keep it small.
+  - `README.md`: local `ref/` submodule setup wording.
+  - `ref/`: SSH-backed git submodules for external references; do not vendor
+    their full contents into BeatOdds history.
 - Local data exists under `data/` and is intentionally ignored.
 - `.env` contains local API keys and must never be committed.
 - DuckDB file locking matters: do not run two CLI commands that open

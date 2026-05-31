@@ -41,11 +41,12 @@ allow-direct-references = true
 packages = ["src/beatodds"]
 
 [tool.uv.sources]
-py-clob-client-v2 = { path = "../ref/official-polymarket/py-clob-client-v2" }
+py-clob-client-v2 = { path = "ref/official-polymarket/py-clob-client-v2" }
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+exclude = ["ref"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

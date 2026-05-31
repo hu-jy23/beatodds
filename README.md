@@ -191,7 +191,11 @@ cd beatodds
 uv sync
 ```
 
-`ref/` 目录只保存上游仓库链接，不再存放完整镜像。
+`ref/` 目录通过 git submodule 固定上游参考仓库版本。首次 clone 后如未自动拉取子模块，运行：
+
+```bash
+git submodule update --init --recursive
+```
 
 开发和测试环境：
 

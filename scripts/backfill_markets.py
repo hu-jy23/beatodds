@@ -12,9 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from loguru import logger
-
 from beatodds.data.indexers import MarketIndexer
+from loguru import logger
 
 
 def main():

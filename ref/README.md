@@ -1,6 +1,11 @@
 # Reference Repositories
 
-This directory keeps lightweight pointers to external repositories used during development.
+This directory contains external repositories as git submodules used during development.
+After cloning BeatOdds, initialize them with:
+
+```bash
+git submodule update --init --recursive
+```
 
 ## Official Polymarket
 

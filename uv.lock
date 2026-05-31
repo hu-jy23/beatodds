@@ -269,7 +269,7 @@ requires-dist = [
     { name = "newsapi-python", specifier = ">=0.2.7" },
     { name = "openai", specifier = ">=2.38.0" },
     { name = "pandas", specifier = ">=2.0" },
-    { name = "py-clob-client-v2", directory = "../ref/official-polymarket/py-clob-client-v2" },
+    { name = "py-clob-client-v2", directory = "ref/official-polymarket/py-clob-client-v2" },
     { name = "pyarrow", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pydantic-settings", specifier = ">=2.4" },
@@ -1716,7 +1716,7 @@ wheels = [
 [[package]]
 name = "py-clob-client-v2"
 version = "1.0.1"
-source = { directory = "../ref/official-polymarket/py-clob-client-v2" }
+source = { directory = "ref/official-polymarket/py-clob-client-v2" }
 dependencies = [
     { name = "eth-abi" },
     { name = "eth-account" },
