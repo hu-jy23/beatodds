@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BeatOdds Console</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell" id="appShell">
+      <aside class="rail left-rail" id="leftRail">
+        <div class="rail-head">
+          <div>
+            <p class="eyebrow">BeatOdds</p>
+            <h1>Markets</h1>
+          </div>
+          <button class="icon-btn" id="hideLeft" title="Hide market list">&lt;</button>
+        </div>
+        <div class="search-row">
+          <input id="marketSearch" type="search" placeholder="Search markets" />
+        </div>
+        <div class="segmented" role="tablist">
+          <button class="segment active" data-filter="all">All</button>
+          <button class="segment" data-filter="tracked">Tracked</button>
+          <button class="segment" data-filter="neg">Neg</button>
+        </div>
+        <div class="market-list" id="marketList"></div>
+      </aside>
+
+      <main class="main-col">
+        <header class="topbar">
+          <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show market list">&gt;</button>
+          <div class="title-block">
+            <p class="eyebrow">Operator Console</p>
+            <h2 id="selectedTitle">Loading markets</h2>
+          </div>
+          <div class="top-actions">
+            <button class="btn secondary" id="refreshBtn">Refresh</button>
+            <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
+          </div>
+        </header>
+
+        <section class="analysis-panel">
+          <div class="analysis-head">
+            <div>
+              <p class="eyebrow">Analysis</p>
+              <h3 id="stance">Awaiting selection</h3>
+            </div>
+            <div class="pill" id="edgePill">edge 0.0%</div>
+          </div>
+          <p class="advice" id="advice">Select a market to inspect live pricing and advice.</p>
+          <div class="action-row">
+            <button class="btn primary" id="trackBtn">Track</button>
+            <button class="btn" id="dealBtn">Paper deal</button>
+            <button class="btn" id="followBtn">Follow up</button>
+            <button class="btn" id="reviewBtn">Reviewed</button>
+          </div>
+        </section>
+
+        <section class="detail-block topic-detail-block">
+          <div class="panel-head tight">
+            <h3>Live Price</h3>
+            <span id="snapshotTime">--</span>
+          </div>
+          <canvas id="priceChart" width="720" height="220"></canvas>
+          <div class="quote-grid" id="quoteGrid"></div>
+          <div class="data-status" id="snapshotStatus"></div>
+        </section>
+
+        <section class="detail-block topic-detail-block">
+          <div class="panel-head tight">
+            <h3>Statistics</h3>
+            <span>current dataset context</span>
+          </div>
+          <div class="topic-chart-grid">
+            <canvas id="statsChart" width="360" height="180"></canvas>
+            <canvas id="edgeChart" width="360" height="180"></canvas>
+          </div>
+        </section>
+
+        <section class="topic-panel">
+          <div class="panel-head tight">
+            <h3>Current Topic Brief</h3>
+            <span id="topicStatus">selected market only</span>
+          </div>
+          <div class="topic-grid" id="topicBrief"></div>
+          <div class="message-list compact" id="topicMessages"></div>
+        </section>
+
+        <section class="dialog-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Dialog</p>
+              <h3>Decision Notes</h3>
+            </div>
+            <div class="clear-row">
+              <button class="btn subtle" id="clearTopicBtn">Clear topic</button>
+              <button class="btn subtle danger" id="clearAllBtn">Clear all</button>
+            </div>
+          </div>
+          <div class="note-composer">
+            <textarea id="noteInput" rows="4" placeholder="Add an operator note"></textarea>
+            <button class="btn primary" id="saveNoteBtn">Save note</button>
+          </div>
+          <div class="timeline" id="timeline"></div>
+        </section>
+
+        <section class="detail-block topic-detail-block">
+          <div class="panel-head tight">
+            <h3>Evidence</h3>
+          </div>
+          <div class="evidence-list" id="evidenceList"></div>
+        </section>
+      </main>
+
+      <aside class="rail right-rail" id="rightRail">
+        <div class="rail-head">
+          <div>
+            <p class="eyebrow">Market</p>
+            <h1>Console</h1>
+          </div>
+          <button class="icon-btn" id="hideRight" title="Hide console">&gt;</button>
+        </div>
+        <section class="metric-strip" id="metricStrip"></section>
+        <section class="detail-block console-intro">
+          <div class="panel-head tight">
+            <h3>Operator Summary</h3>
+            <span>aggregate state</span>
+          </div>
+          <div class="mini-stats" id="consoleSummary"></div>
+        </section>
+        <section class="detail-block report-block">
+          <div class="panel-head tight">
+            <h3>Special Report</h3>
+            <span>priority alerts</span>
+          </div>
+          <div class="special-list" id="specialReport"></div>
+        </section>
+        <section class="detail-block console-panel">
+          <div class="panel-head tight">
+            <h3>Tracking Console</h3>
+            <span id="trackingStatus">--</span>
+          </div>
+          <div class="mini-stats" id="trackingStats"></div>
+          <canvas id="trackedChart" width="420" height="150"></canvas>
+        </section>
+        <section class="detail-block console-panel">
+          <div class="panel-head tight">
+            <h3>Action Report</h3>
+            <span id="actionStatus">--</span>
+          </div>
+          <div class="report-list" id="actionReport"></div>
+        </section>
+        <section class="detail-block message-panel">
+          <div class="panel-head tight">
+            <h3>Generated Messages</h3>
+            <span>follow-up drafts</span>
+          </div>
+          <div class="message-list" id="messageList"></div>
+        </section>
+      </aside>
+    </div>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>
