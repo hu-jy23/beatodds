@@ -29,14 +29,21 @@
 
       <main class="main-col">
         <header class="topbar">
-          <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show market list">&gt;</button>
-          <div class="title-block">
-            <p class="eyebrow">Operator Console</p>
-            <h2 id="selectedTitle">Loading markets</h2>
+          <div class="topbar-title-row">
+            <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show market list">&gt;</button>
+            <div class="title-block">
+              <p class="eyebrow">Operator Console</p>
+              <h2 id="selectedTitle">Loading markets</h2>
+            </div>
           </div>
-          <div class="top-actions">
-            <button class="btn secondary" id="refreshBtn">Refresh</button>
-            <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
+          <div class="topbar-action-row">
+            <div class="top-actions">
+              <button class="btn" id="updateCurrentBtn">Update topic</button>
+              <button class="btn" id="updateTrackedBtn">Update tracked</button>
+              <button class="btn" id="updateAllBtn">Update all</button>
+              <button class="btn secondary" id="refreshBtn">Refresh</button>
+              <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
+            </div>
           </div>
         </header>
 
@@ -107,9 +114,10 @@
 
         <section class="detail-block topic-detail-block">
           <div class="panel-head tight">
-            <h3>Evidence</h3>
+            <h3>Related News</h3>
+            <span id="newsStatus">manual update fills this list</span>
           </div>
-          <div class="evidence-list" id="evidenceList"></div>
+          <div class="evidence-list" id="newsList"></div>
         </section>
       </main>
 
@@ -159,6 +167,45 @@
           <div class="message-list" id="messageList"></div>
         </section>
       </aside>
+    </div>
+    <div class="modal-backdrop" id="updateAllDialog" aria-hidden="true">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="updateAllTitle">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Manual Batch Update</p>
+            <h3 id="updateAllTitle">Update all topics?</h3>
+          </div>
+          <button class="icon-btn ghost" id="closeUpdateDialog" title="Close dialog">x</button>
+        </div>
+        <p class="modal-copy">
+          This can take minutes and may consume a lot of LLM and search tokens.
+          Choose a bounded run unless you intentionally want to refresh every listed topic.
+        </p>
+        <div class="choice-group">
+          <label class="choice-card">
+            <input type="radio" name="updateScope" value="limited" checked />
+            <span>
+              <strong>Limited topics</strong>
+              <small>Refresh the first N prioritized topics.</small>
+            </span>
+          </label>
+          <label class="choice-card">
+            <input type="radio" name="updateScope" value="all" />
+            <span>
+              <strong>All topics in list</strong>
+              <small>Refresh every loaded topic in the left rail.</small>
+            </span>
+          </label>
+        </div>
+        <label class="count-field" for="updateTopicCount">
+          Topic count
+          <input id="updateTopicCount" type="number" min="1" max="120" value="8" />
+        </label>
+        <div class="modal-actions">
+          <button class="btn subtle" id="cancelUpdateAll">Cancel</button>
+          <button class="btn primary" id="confirmUpdateAll">Start update</button>
+        </div>
+      </div>
     </div>
     <script src="/assets/app.js"></script>
   </body>

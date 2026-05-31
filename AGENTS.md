@@ -76,6 +76,13 @@ As of 2026-05-25:
   state including metric strip, operator summary, reports, and generated
   messages. Chart sizing uses fixed logical canvas heights to avoid growth when
   switching topics.
+- As of 2026-05-31, the LLM forecaster returns a persisted
+  `forecast_direction` (`tend_yes`, `tend_no`, or `observe`) in addition to
+  `p_f`. The GUI exposes manual `Update topic` and `Update all` controls:
+  current-topic updates refresh live market info, retrieve related Tavily news,
+  run the LLM forecast when a live CLOB snapshot is available, persist the run
+  to the workflow DB, and show related news in the middle rail. The current
+  `Update all` endpoint is bounded to a small batch for cost/runtime control.
 - Current uncommitted development includes:
   - `scripts/run_forecast.py`: sports and probability filters.
   - `scripts/run_batch_eval.py`: batch forecasting, stored records, manual

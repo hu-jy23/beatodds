@@ -32,11 +32,15 @@ Rules:
 
 {
   "p_f": <0.0-1.0>,
+  "forecast_direction": "<tend_yes|tend_no|observe>",
   "confidence": <0.1-1.0>,
   "reasoning": "<1-2 sentences explaining the key factor driving your estimate>"
 }
 
 p_f: your probability estimate
+forecast_direction: tend_yes when evidence makes YES more likely than the market price,
+tend_no when evidence makes YES less likely than the market price, observe when evidence
+does not support a directional lean.
 confidence: 0.1=very uncertain (stay near market), 1.0=high certainty from strong evidence
 """
 
@@ -95,6 +99,7 @@ class LLMForecaster:
                 condition_id=market.condition_id,
                 p_f=p_m,
                 confidence=0.1,
+                forecast_direction="observe",
                 evidence_items=evidence,
                 reasoning=f"Forecast failed ({type(e).__name__}); defaulting to market price",
                 frozen_at=evidence_frozen_at,
@@ -135,10 +140,19 @@ class LLMForecaster:
         data = json.loads(raw.strip())
 
         p_f = max(0.001, min(0.999, float(data["p_f"])))
+        direction = str(data.get("forecast_direction") or "").lower()
+        if direction not in {"tend_yes", "tend_no", "observe"}:
+            if p_f > p_m + 0.005:
+                direction = "tend_yes"
+            elif p_f < p_m - 0.005:
+                direction = "tend_no"
+            else:
+                direction = "observe"
         return ForecastResult(
             condition_id=market.condition_id,
             p_f=p_f,
             confidence=float(data.get("confidence", 0.5)),
+            forecast_direction=direction,
             evidence_items=evidence,
             reasoning=data.get("reasoning", ""),
             frozen_at=datetime.now(timezone.utc),   # overwritten by caller

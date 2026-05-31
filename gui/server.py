@@ -18,7 +18,12 @@ import duckdb
 from loguru import logger
 
 from beatodds.common.config import get_settings
+from beatodds.common.types import CandidateMarket, MarketMeta, PriceSnapshot
 from beatodds.data.clob_client import ClobReadClient
+from beatodds.evaluation.workflow_store import save_forecast_run
+from beatodds.evidence.forecaster import LLMForecaster
+from beatodds.evidence.retriever import EvidenceRetriever
+from beatodds.resolution_parser.parser import ResolutionParser
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "gui" / "web"
@@ -34,6 +39,7 @@ class GuiState:
     followups: list[dict]
     reviews: list[dict]
     messages: list[dict]
+    news: list[dict]
 
 
 class GuiStore:
@@ -46,7 +52,7 @@ class GuiStore:
     def load(self) -> GuiState:
         with self._lock:
             if not self.path.exists():
-                return GuiState([], None, [], [], [], [], [], [])
+                return GuiState([], None, [], [], [], [], [], [], [])
             data = json.loads(self.path.read_text(encoding="utf-8"))
             return GuiState(
                 tracked_ids=list(data.get("tracked_ids", [])),
@@ -57,6 +63,7 @@ class GuiStore:
                 followups=list(data.get("followups", [])),
                 reviews=list(data.get("reviews", [])),
                 messages=list(data.get("messages", [])),
+                news=list(data.get("news", [])),
             )
 
     def save(self, state: GuiState) -> None:
@@ -82,6 +89,9 @@ class GuiData:
     def __init__(self):
         self.cfg = get_settings()
         self.store = GuiStore()
+        self._parser: ResolutionParser | None = None
+        self._retriever: EvidenceRetriever | None = None
+        self._forecaster: LLMForecaster | None = None
 
     @property
     def market_db(self) -> Path:
@@ -160,6 +170,7 @@ class GuiData:
             "analysis": self._analysis(market, snapshot, forecast),
             "chart": chart,
             "evidence": self._latest_evidence(forecast.get("run_id") if forecast else None),
+            "related_news": self._related_news(condition_id),
             "topic_logs": self.topic_logs(condition_id),
         }
 
@@ -172,6 +183,7 @@ class GuiData:
             "followups": self._topic_filter(state.followups, condition_id)[:20],
             "reviews": self._topic_filter(state.reviews, condition_id)[:20],
             "messages": self._topic_filter(state.messages, condition_id)[:20],
+            "news": self._topic_filter(state.news, condition_id)[:20],
             "special_reports": self._special_reports(condition_id=condition_id),
         }
 
@@ -315,6 +327,91 @@ class GuiData:
         self.store.append_action(action, condition_id, payload)
         return self.state_payload()
 
+    def update_topic(self, condition_id: str) -> dict:
+        markets = self.markets()
+        market = next((m for m in markets if m["condition_id"] == condition_id), None)
+        if not market:
+            return self.state_payload()
+        result = self._refresh_market(market)
+        self.store.append_action("update_topic", condition_id, result)
+        return self.state_payload()
+
+    def update_all_topics(self, max_topics: int = 8) -> dict:
+        state = self.store.load()
+        markets = self.markets()
+        tracked_ids = set(state.tracked_ids)
+        selected_id = state.selected_id
+        ordered = sorted(
+            markets,
+            key=lambda m: (
+                m["condition_id"] != selected_id,
+                m["condition_id"] not in tracked_ids,
+                -m["volume_24h"],
+            ),
+        )
+        results = []
+        for market in ordered[:max(1, max_topics)]:
+            results.append(self._refresh_market(market))
+        self.store.append_action(
+            "update_all",
+            selected_id or "",
+            {"updated": len(results), "results": results},
+        )
+        return self.state_payload()
+
+    def update_tracked_topics(self) -> dict:
+        state = self.store.load()
+        tracked_ids = set(state.tracked_ids)
+        markets = [
+            market for market in self.markets()
+            if market["condition_id"] in tracked_ids
+        ]
+        results = [self._refresh_market(market) for market in markets]
+        self.store.append_action(
+            "update_tracked",
+            state.selected_id or "",
+            {"updated": len(results), "results": results},
+        )
+        return self.state_payload()
+
+    def _refresh_market(self, market: dict) -> dict:
+        market_meta = self._market_meta(market)
+        snapshot, snapshot_status = self._live_snapshot_obj(market)
+        candidate = CandidateMarket(
+            market=market_meta,
+            snapshot=snapshot or self._fallback_snapshot(market),
+            scan_flags=["gui_manual_update"],
+            priority_score=0.0,
+        )
+        features = self._parser_client().parse(market_meta)
+        evidence, frozen_at = self._retriever_client().retrieve(candidate, features)
+        self._store_news(market["condition_id"], evidence)
+        result = {
+            "condition_id": market["condition_id"],
+            "news_count": len(evidence),
+            "snapshot_available": snapshot_status["available"],
+            "snapshot_reason": snapshot_status["reason"],
+            "forecast_saved": False,
+        }
+        if snapshot is None:
+            result["forecast_reason"] = "Skipped forecast because no live price is available."
+            return result
+        forecast = self._forecaster_client().forecast(candidate, evidence, frozen_at)
+        save_forecast_run(
+            candidate=candidate,
+            features=features,
+            evidence=evidence,
+            forecast=forecast,
+            evidence_frozen_at=frozen_at,
+        )
+        result.update({
+            "forecast_saved": True,
+            "forecast_direction": forecast.forecast_direction,
+            "p_f": forecast.p_f,
+            "confidence": forecast.confidence,
+        })
+        return result
+
     def clear_topic(self, condition_id: str) -> dict:
         state = self.store.load()
         state.notes = self._without_topic(state.notes, condition_id)
@@ -323,6 +420,7 @@ class GuiData:
         state.followups = self._without_topic(state.followups, condition_id)
         state.reviews = self._without_topic(state.reviews, condition_id)
         state.messages = self._without_topic(state.messages, condition_id)
+        state.news = self._without_topic(state.news, condition_id)
         self.store.save(state)
         return self.state_payload()
 
@@ -334,6 +432,7 @@ class GuiData:
         state.followups = []
         state.reviews = []
         state.messages = []
+        state.news = []
         self.store.save(state)
         return self.state_payload()
 
@@ -408,6 +507,95 @@ class GuiData:
             if report:
                 reports.append(report)
         return reports[:8]
+
+    def _store_news(self, condition_id: str, evidence: list) -> None:
+        state = self.store.load()
+        state.news = self._without_topic(state.news, condition_id)
+        now = _now()
+        for item in evidence[:12]:
+            state.news.append({
+                "at": now,
+                "condition_id": condition_id,
+                "query": item.query,
+                "title": item.title,
+                "summary": item.summary,
+                "url": item.url,
+                "source": item.source,
+                "published_at": _iso(item.published_at),
+                "relevance_score": item.relevance_score,
+            })
+        state.news = state.news[-240:]
+        self.store.save(state)
+
+    def _related_news(self, condition_id: str) -> list[dict]:
+        state = self.store.load()
+        news = list(reversed(self._topic_filter(state.news, condition_id)))
+        return news[:12]
+
+    def _parser_client(self) -> ResolutionParser:
+        if self._parser is None:
+            self._parser = ResolutionParser()
+        return self._parser
+
+    def _retriever_client(self) -> EvidenceRetriever:
+        if self._retriever is None:
+            self._retriever = EvidenceRetriever()
+        return self._retriever
+
+    def _forecaster_client(self) -> LLMForecaster:
+        if self._forecaster is None:
+            self._forecaster = LLMForecaster()
+        return self._forecaster
+
+    def _market_meta(self, market: dict) -> MarketMeta:
+        return MarketMeta(
+            condition_id=market["condition_id"],
+            question=market["question"],
+            category=market.get("category") or "",
+            neg_risk=bool(market.get("neg_risk")),
+            token_yes_id=market.get("token_yes_id") or "",
+            token_no_id=market.get("token_no_id") or "",
+            close_time=_parse_iso(market.get("close_time")),
+            volume_24h=float(market.get("volume_24h") or 0),
+            liquidity=float(market.get("liquidity") or 0),
+            active=bool(market.get("active")),
+            slug=market.get("slug") or "",
+        )
+
+    def _live_snapshot_obj(self, market: dict) -> tuple[PriceSnapshot | None, dict]:
+        token_id = market.get("token_yes_id") or market.get("token_no_id")
+        snapshot, status = self._live_snapshot(market)
+        if snapshot is None or not token_id:
+            return None, status
+        return (
+            PriceSnapshot(
+                condition_id=market["condition_id"],
+                token_id=token_id,
+                snapshot_time=_parse_iso(snapshot["snapshot_time"]) or datetime.now(timezone.utc),
+                midpoint=float(snapshot["midpoint"]),
+                best_bid=float(snapshot["best_bid"]),
+                best_ask=float(snapshot["best_ask"]),
+                spread=float(snapshot["spread"]),
+                last_trade_price=snapshot.get("last_trade_price"),
+                volume_24h=float(market.get("volume_24h") or 0),
+                source="triggered",
+            ),
+            status,
+        )
+
+    def _fallback_snapshot(self, market: dict) -> PriceSnapshot:
+        token_id = market.get("token_yes_id") or market.get("token_no_id") or ""
+        return PriceSnapshot(
+            condition_id=market["condition_id"],
+            token_id=token_id,
+            snapshot_time=datetime.now(timezone.utc),
+            midpoint=0.5,
+            best_bid=0.5,
+            best_ask=0.5,
+            spread=0.0,
+            volume_24h=float(market.get("volume_24h") or 0),
+            source="triggered",
+        )
 
     def _topic_filter(self, items: list[dict], condition_id: str) -> list[dict]:
         return [item for item in items if item.get("condition_id") == condition_id]
@@ -485,10 +673,23 @@ class GuiData:
                 tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
                 if "forecast_runs" not in tables:
                     return None
+                columns = {
+                    row[1]
+                    for row in conn.execute("PRAGMA table_info('forecast_runs')").fetchall()
+                }
+                direction_expr = (
+                    "forecast_direction"
+                    if "forecast_direction" in columns else "'observe'"
+                )
+                evidence_col = (
+                    "evidence_frozen_at"
+                    if "evidence_frozen_at" in columns else "evidence_cutoff"
+                )
+                model_col = "model_version" if "model_version" in columns else "model"
                 row = conn.execute(
-                    """
-                    SELECT run_id, snapshot_time, evidence_cutoff, p_m, p_f, confidence,
-                           edge, model, reasoning
+                    f"""
+                    SELECT run_id, snapshot_time, {evidence_col}, p_m, p_f, confidence,
+                           edge, {model_col}, reasoning, {direction_expr}
                     FROM forecast_runs
                     WHERE condition_id = ?
                     ORDER BY snapshot_time DESC
@@ -510,6 +711,7 @@ class GuiData:
             "edge": float(row[6] or 0),
             "model": row[7] or "",
             "reasoning": row[8] or "",
+            "forecast_direction": row[9] or "observe",
         }
 
     def _latest_evidence(self, run_id: str | None) -> list[dict]:
@@ -553,9 +755,18 @@ class GuiData:
                 tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
                 if "forecast_runs" not in tables:
                     return []
+                columns = {
+                    row[1]
+                    for row in conn.execute("PRAGMA table_info('forecast_runs')").fetchall()
+                }
+                direction_expr = (
+                    "forecast_direction"
+                    if "forecast_direction" in columns else "'observe'"
+                )
                 rows = conn.execute(
-                    """
-                    SELECT condition_id, p_m, p_f, edge, confidence, snapshot_time
+                    f"""
+                    SELECT condition_id, p_m, p_f, edge, confidence, snapshot_time,
+                           {direction_expr}
                     FROM forecast_runs
                     ORDER BY ABS(edge) DESC, snapshot_time DESC
                     LIMIT 20
@@ -571,6 +782,7 @@ class GuiData:
                 "edge": float(row[3] or 0),
                 "confidence": float(row[4] or 0),
                 "snapshot_time": _iso(row[5]),
+                "forecast_direction": row[6] or "observe",
             }
             for row in rows
         ]
@@ -628,7 +840,7 @@ class GuiData:
         if not snapshot:
             stance = "Observe"
             advice = "No live order book snapshot is available; keep this market on watch."
-        elif forecast and edge > lean_threshold:
+        elif forecast and forecast.get("forecast_direction") == "tend_yes":
             stance = "Tend YES"
             if net_edge > action_threshold:
                 advice = "Forecast exceeds market after spread and fee buffer. Size cautiously."
@@ -637,7 +849,7 @@ class GuiData:
                     "Forecast leans above market, but the edge is not strong enough "
                     "after spread and fee buffer."
                 )
-        elif forecast and edge < -lean_threshold:
+        elif forecast and forecast.get("forecast_direction") == "tend_no":
             stance = "Tend NO"
             if net_edge > action_threshold:
                 advice = "Forecast is below market after costs. Do not buy YES at current ask."
@@ -645,6 +857,9 @@ class GuiData:
                 advice = (
                     "Forecast leans below market, but costs absorb most of the signal."
                 )
+        elif forecast and abs(edge) > lean_threshold:
+            stance = "Tend YES" if edge > 0 else "Tend NO"
+            advice = "Forecast direction was neutral, but p_f differs slightly from p_m."
         elif market["neg_risk"]:
             stance = "Track Structure"
             advice = (
@@ -693,6 +908,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.data.add_note(condition_id, str(payload.get("text") or "")))
         if parsed.path == "/api/action":
             return self._json(self.data.action(condition_id, str(payload.get("action") or "")))
+        if parsed.path == "/api/update-current":
+            return self._json(self.data.update_topic(condition_id))
+        if parsed.path == "/api/update-tracked":
+            return self._json(self.data.update_tracked_topics())
+        if parsed.path == "/api/update-all":
+            return self._json(
+                self.data.update_all_topics(int(payload.get("max_topics") or 8))
+            )
         if parsed.path == "/api/clear-topic":
             return self._json(self.data.clear_topic(condition_id))
         if parsed.path == "/api/clear-all":
@@ -736,6 +959,17 @@ def _iso(value: object) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value)
+
+
+def _parse_iso(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _now() -> str:

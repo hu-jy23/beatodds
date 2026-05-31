@@ -3,6 +3,8 @@ const app = {
   selectedId: null,
   filter: "all",
   search: "",
+  updating: false,
+  pendingUpdateAll: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -158,16 +160,19 @@ function renderSelected() {
     .map(([label, value]) => `<div class="quote-cell"><span>${label}</span><strong>${value}</strong></div>`)
     .join("");
 
-  const evidence = selected.evidence || [];
-  $("evidenceList").innerHTML =
-    evidence.length === 0
-      ? `<div class="evidence-item"><p>No stored evidence for this market yet.</p></div>`
-      : evidence
+  const news = selected.related_news || selected.evidence || [];
+  $("newsStatus").textContent =
+    news.length > 0 ? `${news.length} related items` : "manual update fills this list";
+  $("newsList").innerHTML =
+    news.length === 0
+      ? `<div class="evidence-item"><p>No related news stored for this topic yet. Use Update topic to fetch news and refresh the forecast.</p></div>`
+      : news
           .map(
             (item) => `
               <div class="evidence-item">
                 <a href="${escapeAttr(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || item.source || "Evidence")}</a>
                 <p>${escapeHtml(item.summary || item.query || "")}</p>
+                <span>${escapeHtml(item.source || "")}${item.published_at ? ` · ${new Date(item.published_at).toLocaleDateString()}` : ""}</span>
               </div>
             `,
           )
@@ -407,12 +412,13 @@ function drawPriceChart(canvas, points) {
   const ctx = setupCanvas(canvas);
   clearChart(ctx, canvas, "Market vs fair probability");
   if (!points.length) return;
-  const pad = 34;
+  const pad = { left: 48, right: 18, top: 34, bottom: 38 };
   const w = ctx.logicalWidth;
   const h = ctx.logicalHeight;
   const values = points.flatMap((p) => [p.market, p.fair]).filter((v) => v !== null && v !== undefined);
   const min = Math.max(0, Math.min(...values) - 0.02);
   const max = Math.min(1, Math.max(...values) + 0.02);
+  drawAxes(ctx, points, min, max, pad, w, h);
   drawLine(ctx, points.map((p) => p.market), min, max, pad, w, h, "#2f6df6");
   if (points.some((p) => p.fair !== null)) {
     drawLine(ctx, points.map((p) => p.fair), min, max, pad, w, h, "#1b8f62");
@@ -514,14 +520,63 @@ function clearChart(ctx, canvas, title) {
   ctx.fillText(title, 12, 22);
 }
 
+function drawAxes(ctx, points, min, max, pad, w, h) {
+  const x0 = pad.left;
+  const x1 = w - pad.right;
+  const y0 = h - pad.bottom;
+  const y1 = pad.top;
+  ctx.strokeStyle = "#dce2e7";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x0, y1);
+  ctx.lineTo(x0, y0);
+  ctx.lineTo(x1, y0);
+  ctx.stroke();
+
+  ctx.fillStyle = "#61707d";
+  ctx.font = "11px system-ui";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  const ticks = [max, (max + min) / 2, min];
+  ticks.forEach((value) => {
+    const y = y0 - ((value - min) / Math.max(0.001, max - min)) * (y0 - y1);
+    ctx.strokeStyle = "#edf1f4";
+    ctx.beginPath();
+    ctx.moveTo(x0, y);
+    ctx.lineTo(x1, y);
+    ctx.stroke();
+    ctx.fillText(`${(value * 100).toFixed(1)}%`, x0 - 6, y);
+  });
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  const first = points[0]?.at || "start";
+  const last = points[points.length - 1]?.at || "now";
+  ctx.fillText(String(first).slice(0, 12), x0, y0 + 8);
+  ctx.fillText(String(last).slice(0, 12), x1, y0 + 8);
+  ctx.fillText("time", (x0 + x1) / 2, y0 + 22);
+
+  ctx.save();
+  ctx.translate(13, (y0 + y1) / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("probability", 0, 0);
+  ctx.restore();
+}
+
 function drawLine(ctx, values, min, max, pad, w, h, color) {
+  const left = typeof pad === "number" ? pad : pad.left;
+  const right = typeof pad === "number" ? pad : pad.right;
+  const top = typeof pad === "number" ? pad : pad.top;
+  const bottom = typeof pad === "number" ? pad : pad.bottom;
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
   ctx.beginPath();
   values.forEach((value, idx) => {
     if (value === null || value === undefined) return;
-    const x = pad + (idx / Math.max(1, values.length - 1)) * (w - pad * 2);
-    const y = h - pad - ((value - min) / Math.max(0.001, max - min)) * (h - pad * 2);
+    const x = left + (idx / Math.max(1, values.length - 1)) * (w - left - right);
+    const y = h - bottom - ((value - min) / Math.max(0.001, max - min)) * (h - top - bottom);
     if (idx === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
@@ -585,6 +640,29 @@ function bindEvents() {
   $("dealBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedId, action: "paper_deal" }));
   $("followBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedId, action: "follow_up" }));
   $("reviewBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedId, action: "reviewed" }));
+  $("updateCurrentBtn").addEventListener("click", async () => {
+    await runUpdate("topic");
+  });
+  $("updateTrackedBtn").addEventListener("click", async () => {
+    await runUpdate("tracked");
+  });
+  $("updateAllBtn").addEventListener("click", async () => {
+    openUpdateDialog();
+  });
+  $("closeUpdateDialog").addEventListener("click", closeUpdateDialog);
+  $("cancelUpdateAll").addEventListener("click", closeUpdateDialog);
+  $("updateAllDialog").addEventListener("click", (event) => {
+    if (event.target.id === "updateAllDialog") closeUpdateDialog();
+  });
+  document.querySelectorAll("input[name='updateScope']").forEach((input) => {
+    input.addEventListener("change", updateDialogState);
+  });
+  $("confirmUpdateAll").addEventListener("click", async () => {
+    const mode = document.querySelector("input[name='updateScope']:checked")?.value || "limited";
+    const count = Number($("updateTopicCount").value || 8);
+    closeUpdateDialog();
+    await runUpdate("all", { updateAll: mode === "all", maxTopics: count });
+  });
   $("clearTopicBtn").addEventListener("click", () => post("/api/clear-topic", { condition_id: app.selectedId }));
   $("clearAllBtn").addEventListener("click", () => post("/api/clear-all", {}));
   $("saveNoteBtn").addEventListener("click", async () => {
@@ -593,6 +671,61 @@ function bindEvents() {
     await post("/api/note", { condition_id: app.selectedId, text });
   });
   window.addEventListener("resize", renderCharts);
+}
+
+async function runUpdate(scope, options = {}) {
+  if (app.updating) return;
+  app.updating = true;
+  const labels = {
+    topic: "Updating topic...",
+    tracked: "Updating tracked...",
+    all: options.updateAll ? "Updating all..." : `Updating ${options.maxTopics || 8}...`,
+  };
+  setUpdateButtons(true, labels[scope] || "Updating...");
+  try {
+    if (scope === "all") {
+      await post("/api/update-all", {
+        condition_id: app.selectedId,
+        max_topics: options.updateAll ? (app.state.markets || []).length : options.maxTopics || 8,
+      });
+    } else if (scope === "tracked") {
+      await post("/api/update-tracked", { condition_id: app.selectedId });
+    } else {
+      await post("/api/update-current", { condition_id: app.selectedId });
+    }
+  } finally {
+    app.updating = false;
+    setUpdateButtons(false, "");
+  }
+}
+
+function setUpdateButtons(disabled, label) {
+  $("updateCurrentBtn").disabled = disabled;
+  $("updateTrackedBtn").disabled = disabled;
+  $("updateAllBtn").disabled = disabled;
+  $("updateCurrentBtn").textContent = disabled ? label : "Update topic";
+  $("updateTrackedBtn").textContent = disabled ? "Please wait" : "Update tracked";
+  $("updateAllBtn").textContent = disabled ? "Please wait" : "Update all";
+}
+
+function openUpdateDialog() {
+  $("updateAllDialog").classList.add("open");
+  $("updateAllDialog").setAttribute("aria-hidden", "false");
+  updateDialogState();
+}
+
+function closeUpdateDialog() {
+  $("updateAllDialog").classList.remove("open");
+  $("updateAllDialog").setAttribute("aria-hidden", "true");
+}
+
+function updateDialogState() {
+  const mode = document.querySelector("input[name='updateScope']:checked")?.value || "limited";
+  const countInput = $("updateTopicCount");
+  countInput.disabled = mode === "all";
+  if (mode === "all") {
+    countInput.value = (app.state.markets || []).length || countInput.value;
+  }
 }
 
 bindEvents();

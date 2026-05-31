@@ -41,6 +41,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .btn,
   .icon-btn,
@@ -111,7 +116,8 @@ button {
 }
 
 .rail-head,
-.topbar,
+.topbar-title-row,
+.topbar-action-row,
 .panel-head,
 .analysis-head {
   display: flex;
@@ -309,7 +315,20 @@ textarea:focus {
 }
 
 .topbar {
-  height: 54px;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.topbar-title-row {
+  min-height: 42px;
+}
+
+.topbar-action-row {
+  justify-content: flex-end;
+  min-height: 34px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
 }
 
 .title-block {
@@ -812,6 +831,95 @@ canvas {
   text-decoration: none;
 }
 
+.evidence-item span {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(23, 32, 39, 0.36);
+}
+
+.modal-backdrop.open {
+  display: flex;
+}
+
+.modal {
+  width: min(520px, 100%);
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  animation: modalIn 160ms ease;
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-copy {
+  margin: 12px 0;
+  color: #33434f;
+  line-height: 1.45;
+}
+
+.choice-group {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.choice-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.choice-card strong,
+.choice-card small,
+.count-field {
+  display: block;
+}
+
+.choice-card small {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.count-field {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.count-field input {
+  margin-top: 6px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 @media (max-width: 980px) {
   .app-shell,
   .app-shell.left-collapsed,
@@ -889,5 +997,16 @@ canvas {
   }
   100% {
     transform: scale(1);
+  }
+}
+
+@keyframes modalIn {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }

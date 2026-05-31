@@ -133,6 +133,7 @@ class ForecastResult(BaseModel):
     condition_id: str
     p_f: float                       # fair probability estimate
     confidence: float
+    forecast_direction: Literal["tend_yes", "tend_no", "observe"] = "observe"
     evidence_items: list[EvidenceItem] = Field(default_factory=list)
     reasoning: str = ""
     frozen_at: datetime              # evidence cutoff — must be < snapshot_time

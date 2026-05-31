@@ -148,6 +148,7 @@ def ensure_schema(conn) -> None:
             created_at         TIMESTAMP
         )
     """)
+    _ensure_column(conn, "forecast_runs", "forecast_direction", "TEXT")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS workflow_evidence_items (
             evidence_id      TEXT PRIMARY KEY,
@@ -173,6 +174,15 @@ def ensure_schema(conn) -> None:
         )
     """)
     conn.commit()
+
+
+def _ensure_column(conn, table: str, column: str, ddl_type: str) -> None:
+    columns = {
+        row[1]
+        for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+    }
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
 
 
 def upsert_tracked_market(market: MarketMeta, seen_at: datetime | None = None) -> None:
@@ -314,10 +324,10 @@ def save_forecast_run(
     conn.execute("""
         INSERT INTO forecast_runs (
             run_id, condition_id, snapshot_time, evidence_frozen_at,
-            p_m, p_f, edge, confidence, signal_type, model_version,
+            p_m, p_f, edge, confidence, forecast_direction, signal_type, model_version,
             reasoning, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [
         run_id,
         candidate.market.condition_id,
@@ -327,6 +337,7 @@ def save_forecast_run(
         p_f,
         p_f - p_m,
         forecast.confidence,
+        forecast.forecast_direction,
         signal_type,
         forecast.model,
         forecast.reasoning,
@@ -471,7 +482,8 @@ def load_forecast_runs(condition_id: str | None = None, limit: int = 50) -> list
     if condition_id:
         rows = conn.execute("""
             SELECT run_id, condition_id, snapshot_time, evidence_frozen_at,
-                   p_m, p_f, edge, confidence, signal_type, model_version,
+                   p_m, p_f, edge, confidence, forecast_direction,
+                   signal_type, model_version,
                    reasoning, created_at
             FROM forecast_runs
             WHERE condition_id = ?
@@ -481,7 +493,8 @@ def load_forecast_runs(condition_id: str | None = None, limit: int = 50) -> list
     else:
         rows = conn.execute("""
             SELECT run_id, condition_id, snapshot_time, evidence_frozen_at,
-                   p_m, p_f, edge, confidence, signal_type, model_version,
+                   p_m, p_f, edge, confidence, forecast_direction,
+                   signal_type, model_version,
                    reasoning, created_at
             FROM forecast_runs
             ORDER BY created_at DESC
@@ -498,10 +511,11 @@ def load_forecast_runs(condition_id: str | None = None, limit: int = 50) -> list
             "p_f": row[5],
             "edge": row[6],
             "confidence": row[7],
-            "signal_type": row[8],
-            "model_version": row[9],
-            "reasoning": row[10],
-            "created_at": row[11],
+            "forecast_direction": row[8] or "observe",
+            "signal_type": row[9],
+            "model_version": row[10],
+            "reasoning": row[11],
+            "created_at": row[12],
         }
         for row in rows
     ]
