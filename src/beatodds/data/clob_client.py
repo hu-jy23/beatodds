@@ -67,4 +67,3 @@ class ClobReadClient:
             spread=max(0.0, best_ask - best_bid),
             last_trade_price=last_trade_price,
         )
-

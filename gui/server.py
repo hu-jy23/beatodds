@@ -487,8 +487,8 @@ class GuiData:
                     return None
                 row = conn.execute(
                     """
-                    SELECT run_id, snapshot_time, evidence_cutoff, p_m, p_f, confidence,
-                           edge, model, reasoning
+                    SELECT run_id, snapshot_time, evidence_frozen_at, p_m, p_f, confidence,
+                           edge, model_version, reasoning
                     FROM forecast_runs
                     WHERE condition_id = ?
                     ORDER BY snapshot_time DESC
