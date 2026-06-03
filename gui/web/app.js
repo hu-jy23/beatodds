@@ -1,8 +1,12 @@
 const app = {
   state: null,
-  selectedId: null,
+  selectedEventId: null,
+  selectedMarketId: null,
+  selectedSide: "YES",
+  infoTab: "rules",
   filter: "all",
   search: "",
+  theme: localStorage.getItem("beatodds-theme") || "light",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -12,11 +16,32 @@ function fmtPct(value) {
   return `${(Number(value) * 100).toFixed(1)}%`;
 }
 
+function fmtToken(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  const cents = Number(value) * 100;
+  const digits = cents < 10 && cents !== 0 ? 1 : 0;
+  return `${cents.toFixed(digits)}¢`;
+}
+
 function fmtMoney(value) {
   const n = Number(value || 0);
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}m`;
   if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
   return `$${n.toFixed(0)}`;
+}
+
+function fmtSize(value) {
+  const n = Number(value || 0);
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return n.toFixed(n >= 10 ? 0 : 2);
+}
+
+function fmtDate(value) {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+  return date.toLocaleDateString();
 }
 
 function fmtSignedMoney(value) {
@@ -40,14 +65,38 @@ async function api(path, options = {}) {
 
 async function loadState() {
   app.state = await api("/api/state");
-  app.selectedId = app.state.selected?.market?.condition_id || app.state.state.selected_id;
+  app.selectedEventId = app.state.selected_event?.event_id || app.state.state.selected_event_id;
+  app.selectedMarketId = app.state.selected?.market?.condition_id || app.state.state.selected_market_id;
+  app.selectedSide = app.state.selected?.side || app.state.state.selected_side || app.selectedSide || "YES";
   render();
+  refreshSelectedMarketDetail();
 }
 
 async function post(path, payload) {
   app.state = await api(path, { method: "POST", body: JSON.stringify(payload) });
-  app.selectedId = app.state.selected?.market?.condition_id || app.selectedId;
+  app.selectedEventId = app.state.selected_event?.event_id || app.selectedEventId;
+  app.selectedMarketId = app.state.selected?.market?.condition_id || app.selectedMarketId;
+  app.selectedSide = app.state.selected?.side || app.state.state.selected_side || app.selectedSide || "YES";
   render();
+  refreshSelectedMarketDetail();
+}
+
+async function refreshSelectedMarketDetail() {
+  const marketId = app.selectedMarketId;
+  if (!marketId) return;
+  try {
+    const side = app.selectedSide || "YES";
+    const payload = await api(`/api/market/${encodeURIComponent(marketId)}?side=${encodeURIComponent(side)}`);
+    if (marketId !== app.selectedMarketId || !payload.selected) return;
+    app.state.selected = payload.selected;
+    app.selectedSide = payload.selected.side || side;
+    app.state.state.selected_side = app.selectedSide;
+    renderSelected();
+    renderTimeline();
+    renderCharts();
+  } catch (error) {
+    console.warn("Live market detail failed", error);
+  }
 }
 
 function render() {
@@ -62,10 +111,9 @@ function render() {
 function renderMetrics() {
   const stats = app.state.stats || {};
   const items = [
+    ["Events", stats.event_count || 0],
     ["Markets", stats.market_count || 0],
     ["Tracked", stats.tracked_count || 0],
-    ["24h volume", fmtMoney(stats.total_volume_24h)],
-    ["Liquidity", fmtMoney(stats.total_liquidity)],
   ];
   $("metricStrip").innerHTML = items
     .map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`)
@@ -87,29 +135,34 @@ function renderMetrics() {
 }
 
 function renderMarkets() {
-  const tracked = new Set(app.state.state.tracked_ids || []);
-  let markets = app.state.markets || [];
+  let events = app.state.events || [];
   const query = app.search.trim().toLowerCase();
   if (query) {
-    markets = markets.filter((m) => m.question.toLowerCase().includes(query));
+    events = events.filter((e) => {
+      const haystack = [e.title, e.category, ...(e.tags || [])].join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
   }
-  if (app.filter === "tracked") markets = markets.filter((m) => tracked.has(m.condition_id));
-  if (app.filter === "neg") markets = markets.filter((m) => m.neg_risk);
+  if (app.filter === "tracked") events = events.filter((e) => Number(e.tracked_count || 0) > 0);
+  if (app.filter === "neg") events = events.filter((e) => Number(e.neg_risk_count || 0) > 0);
 
-  $("marketList").innerHTML = markets
-    .map((m) => {
-      const active = m.condition_id === app.selectedId ? "active" : "";
-      const stance = marketStanceClass(m);
-      const tag = m.neg_risk ? `<span class="tag green">neg-risk</span>` : `<span class="tag">binary</span>`;
-      const mark = tracked.has(m.condition_id) ? `<span class="tag amber">tracked</span>` : "";
+  $("marketList").innerHTML = events
+    .map((event) => {
+      const active = event.event_id === app.selectedEventId ? "active" : "";
+      const stance = eventStanceClass(event);
+      const tag = event.neg_risk_count ? `<span class="tag green">neg-risk</span>` : `<span class="tag">event</span>`;
+      const mark = event.tracked_count ? `<span class="tag amber">tracked</span>` : "";
       return `
-        <button class="market-item ${active} ${stance}" data-id="${m.condition_id}">
-          <span class="market-title">${escapeHtml(m.question)}</span>
+        <button class="market-item ${active} ${stance}" data-id="${event.event_id}">
+          <span class="market-title">${escapeHtml(event.title)}</span>
           <span class="market-meta">
-            <span>${fmtMoney(m.volume_24h)} vol</span>
+            <span>${fmtMoney(event.volume_24h)} vol</span>
             <span>${tag}${mark}</span>
           </span>
-          <span class="mini-row"><span>${escapeHtml(m.category || "Market")}</span><span>${shortId(m.condition_id)}</span></span>
+          <span class="mini-row">
+            <span>${escapeHtml(event.category || "Event")}</span>
+            <span>${event.market_count || 0} markets</span>
+          </span>
         </button>
       `;
     })
@@ -118,7 +171,7 @@ function renderMarkets() {
   document.querySelectorAll(".market-item").forEach((el) => {
     el.addEventListener("click", async () => {
       animateClick(el);
-      await post("/api/select", { condition_id: el.dataset.id });
+      await post("/api/select-event", { event_id: el.dataset.id });
       if (window.innerWidth < 980) {
         $("appShell").classList.add("left-collapsed");
       }
@@ -127,38 +180,50 @@ function renderMarkets() {
 }
 
 function renderSelected() {
+  const event = app.state.selected_event;
   const selected = app.state.selected;
-  if (!selected) return;
-  const market = selected.market;
-  const analysis = selected.analysis || {};
-  const snapshot = selected.snapshot;
-  const snapshotStatus = selected.snapshot_status || {};
-  const forecast = selected.forecast;
+  if (!event) return;
+  const market = selected?.market || {};
+  const analysis = selected?.analysis || {};
+  const snapshot = selected?.snapshot;
+  const snapshotStatus = selected?.snapshot_status || {};
+  const forecast = selected?.forecast;
   const tracked = new Set(app.state.state.tracked_ids || []);
+  const side = selected?.side || app.selectedSide || "YES";
+  app.selectedSide = side;
 
-  $("selectedTitle").textContent = market.question;
-  $("stance").textContent = analysis.stance || "Observe";
-  $("advice").textContent = analysis.advice || "No advice available.";
-  $("edgePill").textContent = `edge ${fmtPct(analysis.edge || 0)}`;
-  $("edgePill").className = `pill ${(analysis.edge || 0) > 0.02 ? "good" : (analysis.edge || 0) < -0.02 ? "bad" : ""}`;
-  document.querySelector(".analysis-panel").className = `analysis-panel ${stanceClass(analysis.stance)}`;
+  $("selectedTitle").textContent = event.title;
+  $("stance").textContent = event.category || "Event";
+  $("edgePill").textContent = `${event.edge_count || 0} forecasts`;
+  $("edgePill").className = `pill ${(event.max_abs_edge || 0) > 0.02 ? "good" : ""}`;
+  document.querySelector(".analysis-panel").className = `analysis-panel ${eventStanceClass(event)}`;
+  renderEventHero(event);
+  $("eventMarketCount").textContent = `${event.markets?.length || 0} markets`;
   $("trackBtn").textContent = tracked.has(market.condition_id) ? "Untrack" : "Track";
+  $("selectedMarketTitle").textContent = market.question || "No market selected";
+  $("selectedMarketMeta").textContent = market.condition_id
+    ? `${side} book · ${market.category || "Market"} · ${shortId(market.condition_id)}`
+    : "--";
   $("snapshotTime").textContent = snapshot?.snapshot_time ? new Date(snapshot.snapshot_time).toLocaleString() : "--";
   $("snapshotStatus").textContent = snapshotStatus.reason || "Live price status unavailable.";
   $("snapshotStatus").className = `data-status ${snapshotStatus.available ? "good" : "warn"}`;
+  renderEventInfo(event);
+
+  renderEventMarkets(event);
 
   $("quoteGrid").innerHTML = [
-    ["Bid", snapshot ? fmtPct(snapshot.best_bid) : "--"],
-    ["Ask", snapshot ? fmtPct(snapshot.best_ask) : "--"],
-    ["Market", fmtPct(analysis.p_m)],
-    ["Fair", forecast ? fmtPct(forecast.p_f) : "--"],
+    [`${side} Bid`, snapshot ? fmtPct(snapshot.best_bid) : "--"],
+    [`${side} Ask`, snapshot ? fmtPct(snapshot.best_ask) : "--"],
+    [`${side} Market`, fmtPct(analysis.p_m)],
+    [`${side} Fair`, forecast ? fmtPct(analysis.p_f) : "--"],
     ["Spread", snapshot ? fmtPct(snapshot.spread) : "--"],
     ["Net edge", fmtPct(analysis.net_edge_estimate)],
   ]
     .map(([label, value]) => `<div class="quote-cell"><span>${label}</span><strong>${value}</strong></div>`)
     .join("");
+  renderOrderBook(snapshot, side);
 
-  const evidence = selected.evidence || [];
+  const evidence = selected?.evidence || [];
   $("evidenceList").innerHTML =
     evidence.length === 0
       ? `<div class="evidence-item"><p>No stored evidence for this market yet.</p></div>`
@@ -173,7 +238,128 @@ function renderSelected() {
           )
           .join("");
 
-  renderTopicBrief(selected);
+  renderTopicBrief(event, selected);
+}
+
+function renderEventHero(event) {
+  const image = event.icon || event.image || "";
+  $("eventIcon").innerHTML = image
+    ? `<img src="${escapeAttr(image)}" alt="" loading="lazy" />`
+    : `<span>${escapeHtml(initials(event.title))}</span>`;
+  const tags = [event.category, ...(event.tags || [])].filter(Boolean).slice(0, 6);
+  $("eventTags").innerHTML = tags.length
+    ? tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")
+    : `<span class="tag">event</span>`;
+  const meta = [
+    ["24h Volume", fmtMoney(event.volume_24h)],
+    ["Liquidity", fmtMoney(event.liquidity)],
+    ["Markets", String(event.market_count || 0)],
+    ["End", fmtDate(event.end_time)],
+  ];
+  $("eventMeta").innerHTML = meta
+    .map(([label, value]) => `<span><strong>${escapeHtml(value)}</strong>${escapeHtml(label)}</span>`)
+    .join("");
+}
+
+function renderOrderBook(snapshot, side) {
+  const book = snapshot?.order_book || {};
+  const asks = book.asks || [];
+  const bids = book.bids || [];
+  if (!asks.length && !bids.length) {
+    $("orderBook").innerHTML = `
+      <div class="book-empty">No live order book levels returned for ${escapeHtml(side)}.</div>
+    `;
+    return;
+  }
+  $("orderBook").innerHTML = `
+    <div class="book-title-row">
+      <strong>${escapeHtml(side)} Order Book</strong>
+      <span>${asks.length} asks · ${bids.length} bids</span>
+    </div>
+    <div class="order-book-grid">
+      ${renderBookSide("Asks", asks, "ask")}
+      ${renderBookSide("Bids", bids, "bid")}
+    </div>
+  `;
+}
+
+function renderBookSide(label, rows, kind) {
+  const body = rows.length
+    ? rows.map((row) => `
+        <div class="book-row ${kind}">
+          <span>${fmtToken(row.price)}</span>
+          <span>${fmtSize(row.size)}</span>
+          <span>${fmtMoney(row.total)}</span>
+        </div>
+      `).join("")
+    : `<div class="book-row muted"><span>--</span><span>--</span><span>--</span></div>`;
+  return `
+    <div class="book-side">
+      <div class="book-side-head">
+        <strong>${label}</strong>
+        <span>Price · Shares · Total</span>
+      </div>
+      <div class="book-scroll">
+        ${body}
+      </div>
+    </div>
+  `;
+}
+
+function renderEventInfo(event) {
+  const tab = app.infoTab === "background" ? "background" : "rules";
+  const rules = event.rules || "No explicit resolution rules stored for this event.";
+  const background = event.background || event.description || "No market background stored for this event.";
+  $("eventInfoContent").textContent = tab === "rules" ? rules : background;
+  $("eventInfoStatus").textContent = tab === "rules" ? "resolution criteria" : "market background";
+  $("eventRulesTab").classList.toggle("active", tab === "rules");
+  $("eventBackgroundTab").classList.toggle("active", tab === "background");
+}
+
+function renderEventMarkets(event) {
+  const markets = event.markets || [];
+  $("eventMarketList").innerHTML =
+    markets.length === 0
+      ? `<div class="event-market-row empty"><strong>No markets found for this event.</strong></div>`
+      : markets
+          .map((market) => {
+            const active = market.condition_id === app.selectedMarketId ? "active" : "";
+            const yesActive = active && app.selectedSide === "YES" ? "active" : "";
+            const noActive = active && app.selectedSide === "NO" ? "active" : "";
+            const edge = market.edge;
+            const edgeText = edge === undefined ? "--" : fmtPct(edge);
+            const forecast = market.p_f === undefined ? "no forecast" : `fair ${fmtPct(market.p_f)}`;
+            return `
+              <div class="event-market-row ${active}" data-id="${market.condition_id}">
+                <button class="market-main" data-id="${market.condition_id}" data-side="YES">
+                  <strong>${escapeHtml(market.question)}</strong>
+                  <small>${escapeHtml(market.neg_risk ? "neg-risk" : "binary")} · ${shortId(market.condition_id)}</small>
+                </button>
+                <span class="market-stat">${fmtMoney(market.volume_24h)} vol</span>
+                <span class="market-stat">${forecast}</span>
+                <span class="market-stat ${Number(edge || 0) >= 0 ? "positive" : "negative"}">${edgeText}</span>
+                <span class="token-buttons">
+                  <button class="token-btn yes ${yesActive}" data-id="${market.condition_id}" data-side="YES">
+                    <span>${escapeHtml(market.yes_label || "YES")}</span>
+                    <strong>${fmtToken(market.yes_price)}</strong>
+                  </button>
+                  <button class="token-btn no ${noActive}" data-id="${market.condition_id}" data-side="NO">
+                    <span>${escapeHtml(market.no_label || "NO")}</span>
+                    <strong>${fmtToken(market.no_price)}</strong>
+                  </button>
+                </span>
+              </div>
+            `;
+          })
+          .join("");
+
+  document.querySelectorAll(".market-main[data-id], .token-btn[data-id]").forEach((el) => {
+    el.addEventListener("click", async () => {
+      animateClick(el);
+      app.selectedSide = el.dataset.side || "YES";
+      await post("/api/select-market", { condition_id: el.dataset.id, side: app.selectedSide });
+    });
+  });
 }
 
 function renderTimeline() {
@@ -210,21 +396,21 @@ function renderTimeline() {
           .join("");
 }
 
-function renderTopicBrief(selected) {
-  const market = selected.market || {};
-  const snapshot = selected.snapshot || {};
-  const forecast = selected.forecast || {};
-  const analysis = selected.analysis || {};
-  const logs = selected.topic_logs || {};
+function renderTopicBrief(event, selected) {
+  const market = selected?.market || {};
+  const snapshot = selected?.snapshot || {};
+  const forecast = selected?.forecast || {};
+  const analysis = selected?.analysis || {};
+  const logs = selected?.topic_logs || {};
   $("topicStatus").textContent =
-    `${(logs.actions || []).length} actions · ${(logs.notes || []).length} notes`;
+    `${event.market_count || 0} markets · ${(logs.actions || []).length} market actions`;
   const cells = [
-    ["Market", fmtPct(analysis.p_m), `${fmtMoney(market.volume_24h)} 24h volume`],
-    ["Fair", forecast.p_f !== undefined ? fmtPct(forecast.p_f) : "--", forecast.model || "No stored forecast"],
-    ["Spread", snapshot.spread !== undefined ? fmtPct(snapshot.spread) : "--", "current order book"],
-    ["Net edge", fmtPct(analysis.net_edge_estimate), analysis.stance || "Observe"],
-    ["Category", market.category || "Market", market.neg_risk ? "neg-risk structure" : "binary market"],
-    ["Topic logs", `${(logs.deals || []).length} deals`, `${(logs.followups || []).length} follow-ups · ${(logs.reviews || []).length} reviews`],
+    ["Event volume", fmtMoney(event.volume_24h), `${fmtMoney(event.liquidity)} liquidity`],
+    ["Markets", String(event.market_count || 0), `${event.neg_risk_count || 0} neg-risk markets`],
+    ["Forecasted", String(event.edge_count || 0), `max |edge| ${fmtPct(event.max_abs_edge || 0)}`],
+    [`Selected ${selected?.side || app.selectedSide || "YES"}`, fmtPct(analysis.p_m), market.question || "No market selected"],
+    ["Fair", analysis.p_f !== undefined ? fmtPct(analysis.p_f) : "--", forecast.model || "No stored forecast"],
+    ["Market logs", `${(logs.deals || []).length} deals`, `${(logs.followups || []).length} follow-ups · ${(logs.reviews || []).length} reviews`],
   ];
   $("topicBrief").innerHTML = cells
     .map(
@@ -364,7 +550,7 @@ function stanceClass(stance) {
 }
 
 function marketStanceClass(market) {
-  if (market.condition_id === app.selectedId && app.state.selected?.analysis) {
+  if (market.condition_id === app.selectedMarketId && app.state.selected?.analysis) {
     return stanceClass(app.state.selected.analysis.stance);
   }
   const edge = (app.state.stats?.forecast_edges || []).find(
@@ -373,6 +559,12 @@ function marketStanceClass(market) {
   if (edge > 0.005) return "stance-yes";
   if (edge < -0.005) return "stance-no";
   if (market.neg_risk) return "stance-track";
+  return "stance-observe";
+}
+
+function eventStanceClass(event) {
+  if ((event.max_abs_edge || 0) > 0.02) return "stance-yes";
+  if ((event.neg_risk_count || 0) > 0) return "stance-track";
   return "stance-observe";
 }
 
@@ -422,14 +614,14 @@ function drawPriceChart(canvas, points) {
 
 function drawStatsChart(canvas, categories) {
   const ctx = setupCanvas(canvas);
-  clearChart(ctx, canvas, "Market category mix");
+  clearChart(ctx, canvas, "Event category mix");
   const max = Math.max(1, ...categories.map(([, count]) => count));
   categories.slice(0, 6).forEach(([name, count], idx) => {
     const y = 40 + idx * 21;
     const width = (ctx.logicalWidth - 150) * (count / max);
     ctx.fillStyle = idx % 2 ? "#1b8f62" : "#2f6df6";
     ctx.fillRect(92, y, width, 10);
-    ctx.fillStyle = "#61707d";
+    ctx.fillStyle = cssVar("--muted");
     ctx.font = "11px system-ui";
     ctx.fillText(String(name).slice(0, 12), 10, y + 9);
     ctx.fillText(String(count), 100 + width, y + 9);
@@ -443,7 +635,7 @@ function drawEdgeChart(canvas, edges) {
   if (!values.length) return;
   const max = Math.max(0.02, ...values.map((v) => Math.abs(v)));
   const center = ctx.logicalWidth / 2;
-  ctx.strokeStyle = "#dce2e7";
+  ctx.strokeStyle = cssVar("--line");
   ctx.beginPath();
   ctx.moveTo(center, 32);
   ctx.lineTo(center, ctx.logicalHeight - 18);
@@ -460,7 +652,7 @@ function drawTrackedChart(canvas, categories) {
   const ctx = setupCanvas(canvas);
   clearChart(ctx, canvas, "Tracked event mix");
   if (!categories.length) {
-    ctx.fillStyle = "#61707d";
+    ctx.fillStyle = cssVar("--muted");
     ctx.font = "12px system-ui";
     ctx.fillText("No tracked markets yet", 12, 54);
     return;
@@ -476,7 +668,7 @@ function drawTrackedChart(canvas, categories) {
     ctx.arc(70, 88, 42, start, start + angle);
     ctx.fill();
     ctx.fillRect(135, 48 + idx * 18, 8, 8);
-    ctx.fillStyle = "#33434f";
+    ctx.fillStyle = cssVar("--text");
     ctx.font = "11px system-ui";
     ctx.fillText(`${String(name).slice(0, 16)} (${count})`, 148, 56 + idx * 18);
     start += angle;
@@ -507,9 +699,9 @@ function clearChart(ctx, canvas, title) {
   const width = ctx.logicalWidth || canvas.clientWidth;
   const height = ctx.logicalHeight || Number(canvas.getAttribute("height"));
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#fbfcfd";
+  ctx.fillStyle = cssVar("--panel");
   ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "#172027";
+  ctx.fillStyle = cssVar("--text");
   ctx.font = "600 13px system-ui";
   ctx.fillText(title, 12, 22);
 }
@@ -533,10 +725,23 @@ function drawLegend(ctx, items, w) {
     const x = w - 130 + idx * 62;
     ctx.fillStyle = color;
     ctx.fillRect(x, 14, 8, 8);
-    ctx.fillStyle = "#61707d";
+    ctx.fillStyle = cssVar("--muted");
     ctx.font = "11px system-ui";
     ctx.fillText(label, x + 12, 22);
   });
+}
+
+function cssVar(name) {
+  return getComputedStyle(document.body).getPropertyValue(name).trim();
+}
+
+function initials(value) {
+  return String(value || "BO")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join("") || "BO";
 }
 
 function escapeHtml(value) {
@@ -552,6 +757,7 @@ function escapeAttr(value) {
 }
 
 function bindEvents() {
+  applyTheme(app.theme);
   if (window.innerWidth < 980) {
     $("appShell").classList.add("right-collapsed");
   }
@@ -566,6 +772,9 @@ function bindEvents() {
     button.addEventListener("pointerdown", () => animateClick(button));
   });
   $("refreshBtn").addEventListener("click", loadState);
+  $("themeToggle").addEventListener("click", () => {
+    applyTheme(app.theme === "dark" ? "light" : "dark");
+  });
   $("marketSearch").addEventListener("input", (event) => {
     app.search = event.target.value;
     renderMarkets();
@@ -578,25 +787,42 @@ function bindEvents() {
       renderMarkets();
     });
   });
+  document.querySelectorAll(".tab-btn[data-info-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      app.infoTab = button.dataset.infoTab || "rules";
+      renderEventInfo(app.state.selected_event || {});
+    });
+  });
   $("trackBtn").addEventListener("click", () => {
     const tracked = new Set(app.state.state.tracked_ids || []);
-    post("/api/track", { condition_id: app.selectedId, track: !tracked.has(app.selectedId) });
+    post("/api/track", {
+      condition_id: app.selectedMarketId,
+      track: !tracked.has(app.selectedMarketId),
+    });
   });
-  $("dealBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedId, action: "paper_deal" }));
-  $("followBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedId, action: "follow_up" }));
-  $("reviewBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedId, action: "reviewed" }));
-  $("clearTopicBtn").addEventListener("click", () => post("/api/clear-topic", { condition_id: app.selectedId }));
+  $("dealBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedMarketId, action: "paper_deal" }));
+  $("followBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedMarketId, action: "follow_up" }));
+  $("reviewBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedMarketId, action: "reviewed" }));
+  $("clearTopicBtn").addEventListener("click", () => post("/api/clear-topic", { condition_id: app.selectedMarketId }));
   $("clearAllBtn").addEventListener("click", () => post("/api/clear-all", {}));
   $("saveNoteBtn").addEventListener("click", async () => {
     const text = $("noteInput").value;
     $("noteInput").value = "";
-    await post("/api/note", { condition_id: app.selectedId, text });
+    await post("/api/note", { condition_id: app.selectedMarketId, text });
   });
   window.addEventListener("resize", renderCharts);
+}
+
+function applyTheme(theme) {
+  app.theme = theme === "dark" ? "dark" : "light";
+  document.body.dataset.theme = app.theme;
+  localStorage.setItem("beatodds-theme", app.theme);
+  $("themeToggle").textContent = app.theme === "dark" ? "Light" : "Dark";
+  if (app.state) renderCharts();
 }
 
 bindEvents();
 loadState().catch((error) => {
   $("selectedTitle").textContent = "GUI data failed to load";
-  $("advice").textContent = error.message;
+  $("stance").textContent = error.message;
 });

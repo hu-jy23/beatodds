@@ -12,12 +12,12 @@
         <div class="rail-head">
           <div>
             <p class="eyebrow">BeatOdds</p>
-            <h1>Markets</h1>
+            <h1>Events</h1>
           </div>
-          <button class="icon-btn" id="hideLeft" title="Hide market list">&lt;</button>
+          <button class="icon-btn" id="hideLeft" title="Hide event list">&lt;</button>
         </div>
         <div class="search-row">
-          <input id="marketSearch" type="search" placeholder="Search markets" />
+          <input id="marketSearch" type="search" placeholder="Search events" />
         </div>
         <div class="segmented" role="tablist">
           <button class="segment active" data-filter="all">All</button>
@@ -29,42 +29,52 @@
 
       <main class="main-col">
         <header class="topbar">
-          <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show market list">&gt;</button>
+          <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show event list">&gt;</button>
           <div class="title-block">
-            <p class="eyebrow">Operator Console</p>
+            <p class="eyebrow">Event Detail</p>
             <h2 id="selectedTitle">Loading markets</h2>
           </div>
           <div class="top-actions">
+            <button class="btn secondary" id="themeToggle">Dark</button>
             <button class="btn secondary" id="refreshBtn">Refresh</button>
             <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
           </div>
         </header>
 
         <section class="analysis-panel">
-          <div class="analysis-head">
-            <div>
-              <p class="eyebrow">Analysis</p>
-              <h3 id="stance">Awaiting selection</h3>
+          <div class="event-hero">
+            <div class="event-icon" id="eventIcon">BO</div>
+            <div class="event-hero-main">
+              <div class="tag-row" id="eventTags"></div>
+              <div class="analysis-head">
+                <div>
+                  <p class="eyebrow">Event Overview</p>
+                  <h3 id="stance">Awaiting selection</h3>
+                </div>
+                <div class="pill" id="edgePill">edge 0.0%</div>
+              </div>
+              <div class="event-meta-row" id="eventMeta"></div>
             </div>
-            <div class="pill" id="edgePill">edge 0.0%</div>
-          </div>
-          <p class="advice" id="advice">Select a market to inspect live pricing and advice.</p>
-          <div class="action-row">
-            <button class="btn primary" id="trackBtn">Track</button>
-            <button class="btn" id="dealBtn">Paper deal</button>
-            <button class="btn" id="followBtn">Follow up</button>
-            <button class="btn" id="reviewBtn">Reviewed</button>
           </div>
         </section>
 
         <section class="detail-block topic-detail-block">
           <div class="panel-head tight">
-            <h3>Live Price</h3>
-            <span id="snapshotTime">--</span>
+            <h3>Markets in Event</h3>
+            <span id="eventMarketCount">--</span>
           </div>
-          <canvas id="priceChart" width="720" height="220"></canvas>
-          <div class="quote-grid" id="quoteGrid"></div>
-          <div class="data-status" id="snapshotStatus"></div>
+          <div class="event-market-list" id="eventMarketList"></div>
+        </section>
+
+        <section class="detail-block event-text-block">
+          <div class="panel-head tight">
+            <div class="tab-row" role="tablist" aria-label="Event information">
+              <button class="tab-btn active" id="eventRulesTab" data-info-tab="rules" role="tab">规则</button>
+              <button class="tab-btn" id="eventBackgroundTab" data-info-tab="background" role="tab">盘口背景</button>
+            </div>
+            <span id="eventInfoStatus">resolution criteria</span>
+          </div>
+          <p id="eventInfoContent">--</p>
         </section>
 
         <section class="detail-block topic-detail-block">
@@ -80,8 +90,8 @@
 
         <section class="topic-panel">
           <div class="panel-head tight">
-            <h3>Current Topic Brief</h3>
-            <span id="topicStatus">selected market only</span>
+            <h3>Event Brief</h3>
+            <span id="topicStatus">selected event</span>
           </div>
           <div class="topic-grid" id="topicBrief"></div>
           <div class="message-list compact" id="topicMessages"></div>
@@ -105,23 +115,45 @@
           <div class="timeline" id="timeline"></div>
         </section>
 
-        <section class="detail-block topic-detail-block">
-          <div class="panel-head tight">
-            <h3>Evidence</h3>
-          </div>
-          <div class="evidence-list" id="evidenceList"></div>
-        </section>
       </main>
 
       <aside class="rail right-rail" id="rightRail">
         <div class="rail-head">
           <div>
             <p class="eyebrow">Market</p>
-            <h1>Console</h1>
+            <h1>Workbench</h1>
           </div>
           <button class="icon-btn" id="hideRight" title="Hide console">&gt;</button>
         </div>
         <section class="metric-strip" id="metricStrip"></section>
+        <section class="detail-block console-intro">
+          <div class="panel-head tight">
+            <h3 id="selectedMarketTitle">Selected Market</h3>
+            <span id="selectedMarketMeta">--</span>
+          </div>
+          <div class="action-row">
+            <button class="btn primary" id="trackBtn">Track</button>
+            <button class="btn" id="dealBtn">Paper deal</button>
+            <button class="btn" id="followBtn">Follow up</button>
+            <button class="btn" id="reviewBtn">Reviewed</button>
+          </div>
+        </section>
+        <section class="detail-block console-panel live-price-panel">
+          <div class="panel-head tight">
+            <h3>Live Price</h3>
+            <span id="snapshotTime">--</span>
+          </div>
+          <canvas id="priceChart" width="420" height="180"></canvas>
+          <div class="quote-grid" id="quoteGrid"></div>
+          <div class="order-book" id="orderBook"></div>
+          <div class="data-status" id="snapshotStatus"></div>
+        </section>
+        <section class="detail-block console-panel">
+          <div class="panel-head tight">
+            <h3>Forecast Evidence</h3>
+          </div>
+          <div class="evidence-list" id="evidenceList"></div>
+        </section>
         <section class="detail-block console-intro">
           <div class="panel-head tight">
             <h3>Operator Summary</h3>

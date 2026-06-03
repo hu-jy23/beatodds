@@ -76,6 +76,25 @@ As of 2026-05-25:
   state including metric strip, operator summary, reports, and generated
   messages. Chart sizing uses fixed logical canvas heights to avoid growth when
   switching topics.
+- As of 2026-06-03, the GUI is event-centric to match Polymarket's event →
+  market hierarchy. `data/beatodds.duckdb` now has an `events` table and
+  `markets.event_id`; the left rail lists events, the middle rail shows selected
+  event detail plus markets in that event, and the right rail is the selected
+  market workbench. `/api/state` returns the event shell without blocking on
+  CLOB; live quote details load separately through `/api/market/<condition_id>`.
+- As of 2026-06-03, the GUI middle event page follows Polymarket's event layout
+  more closely: event icon, tags, title/meta, market cards with prominent
+  YES/NO token buttons, and a compact rules/background tab. The UI has a
+  Dark/Light toggle; dark mode uses a black Polymarket-like theme.
+- As of 2026-06-03, the right-rail Live Price panel includes a scrollable CLOB
+  order book for the selected YES/NO token side. It displays all returned ask
+  and bid levels as price, shares, and total; cumulative depth curves are not
+  drawn.
+- Local market schema now stores `events.image`, `events.icon`, and
+  `markets.outcome_prices_json`. Selecting a market side persists
+  `selected_side` in `data/gui_state.json`; `/api/market/<condition_id>?side=NO`
+  reads the NO token order book and converts forecast/chart probabilities to
+  the NO side.
 - Current uncommitted development includes:
   - `scripts/run_forecast.py`: sports and probability filters.
   - `scripts/run_batch_eval.py`: batch forecasting, stored records, manual
@@ -110,26 +129,33 @@ These commands passed most recently:
 uv sync --extra dev
 uv run ruff check .
 uv run pytest -q
+node --check gui/web/app.js
+uv run python -m py_compile gui/server.py src/beatodds/data/indexers.py src/beatodds/data/storage.py
 uv run scripts/run_batch_eval.py --show-stored
 uv run scripts/run_batch_eval.py --compute-bss
 uv run scripts/run_batch_eval.py --show-workflow
 uv run scripts/run_batch_eval.py --show-market 0x7ad403c3508f8e3912940fd1a913f227591145ca0614074208e0b962d5fcc422
 uv run scripts/run_batch_eval.py --show-due --stale-hours 24 --top 10
+uv run scripts/backfill_markets.py --incremental
 ```
 
 Observed live eval state:
 
-- `data/eval.duckdb` contains 6 unresolved records.
-- Stored EvalRecord edge stats: `mean_edge=-0.0372`,
-  `mean_abs_edge=0.0516`, `max_edge=+0.0305`, `min_edge=-0.1105`,
-  `pct |edge|>3%=66.7%`.
-- Workflow tables contain 1 tracked market, 1 snapshot, 1 forecast run, and 16
-  evidence items from a live JD Vance 2028 run.
+- `data/beatodds.duckdb` contains 40 events and 350 cumulative markets after the
+  latest 100-market incremental backfill; 37 events have stored icons and the
+  latest 100 markets have stored outcome prices.
+- `data/eval.duckdb` contains 14 unresolved compact eval records.
+- Stored EvalRecord edge stats: `mean_edge=-0.0188`,
+  `mean_abs_edge=0.0249`, `max_edge=+0.0305`, `min_edge=-0.1105`,
+  `pct |edge|>3%=35.7%`.
+- Workflow tables contain 1 tracked market, 3 snapshots, 2 forecast runs, and 27
+  evidence items from live forecast runs.
 - The tracked workflow market is
   `0x7ad403c3508f8e3912940fd1a913f227591145ca0614074208e0b962d5fcc422`,
   question: `Will JD Vance win the 2028 US Presidential Election?`.
-- Its stored forecast run has `p_m=0.190`, `p_f=0.220`, `edge=+0.030`,
-  `confidence=0.40`, model `deepseek-chat`, and 16 evidence items.
+- Its latest stored forecast run has `p_m=0.190`, `p_f=0.150`, `edge=-0.040`,
+  `confidence=0.30`, model `deepseek-chat`; the workflow history has 2 forecast
+  runs and 27 evidence items.
 - `--show-due --stale-hours 24 --top 10` reports `due_count=0`; the only
   tracked workflow market is not yet due under a 24-hour refresh policy.
 - `--compute-bss` currently reports no resolved records.

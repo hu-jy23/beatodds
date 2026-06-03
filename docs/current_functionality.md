@@ -1,6 +1,6 @@
 # BeatOdds 当前功能说明
 
-状态日期：2026-05-25
+状态日期：2026-06-03
 
 本文档说明当前仓库已经具备哪些能力、哪些文件支撑这些能力，以及本地
 DuckDB 数据库的现况。它用于项目交接和长期开发，不替代面向用户的
@@ -30,8 +30,10 @@ edge = p_f - p_m
 
 能力：
 
-- 从 Polymarket Gamma API 拉取 active/liquid markets。
-- 将 Gamma 原始 payload 解析成强类型 `MarketMeta`。
+- 从 Polymarket Gamma API 拉取 active/liquid markets 及其关联 events。
+- 将 Gamma 原始 payload 解析成强类型 `EventMeta` 和 `MarketMeta`。
+- 保存 event icon/image，以及 market outcomes/outcome prices，用于 GUI 展示
+  YES/NO token 价格。
 - 从 CLOB 获取实时订单簿。
 - 构造包含 bid、ask、midpoint、spread、timestamp 的 `PriceSnapshot`。
 
@@ -39,6 +41,8 @@ edge = p_f - p_m
 
 - `src/beatodds/data/gamma_client.py`
   - `GammaClient.get_liquid_markets()` 按 `volume24hr` 拉取活跃市场。
+  - `GammaClient.get_event()` 拉取单个 event 的完整元数据。
+  - `GammaClient.parse_event()` 将 Gamma event dict 转为 `EventMeta`。
   - `GammaClient.parse_market()` 将 Gamma dict 转为 `MarketMeta`。
   - `GammaClient.get_event_markets()` 拉取完整 event group，用于 neg-risk 检查。
 - `src/beatodds/data/clob_client.py`
@@ -46,7 +50,8 @@ edge = p_f - p_m
   - `ClobReadClient.get_snapshot()` 将订单簿转为 `PriceSnapshot`。
   - 已处理 CLOB v2 的特殊排序：best bid 和 best ask 都取对应侧最后一个元素。
 - `src/beatodds/common/types.py`
-  - 定义 `MarketMeta`、`PriceSnapshot`、`PriceHistoryPoint`、`CandidateMarket`。
+  - 定义 `EventMeta`、`MarketMeta`、`PriceSnapshot`、`PriceHistoryPoint`、
+    `CandidateMarket`。
 
 入口命令：
 
@@ -365,15 +370,50 @@ stored forecast rows
 - `src/beatodds/evaluation/workflow_store.py`
 - `src/beatodds/evaluation/metrics.py`
 
+### 本地 GUI 流程
+
+```text
+data/beatodds.duckdb
+  -> events + latest markets
+  -> left rail event list
+  -> selected event detail
+  -> selected market workbench
+```
+
+当前 GUI 已按 Polymarket 的 event → market 层级组织：
+
+- 左侧是 event list，不再是 market list。
+- 中部展示 selected event 的 icon、tags、title/meta、event 下 markets、规则/盘口
+  背景 tab、event 级统计和 brief。
+- event 下每个 market 以卡片展示，带显眼的 YES/NO token display button。
+- 点击 YES 或 NO 会切换当前查看的 token side，并用对应 token id 读取 CLOB
+  order book。
+- 右侧展示 selected market 的 live price、完整可滚动盘口、forecast/evidence 和
+  operator actions。盘口显示 asks/bids 的 price、shares、total，不画累积深度曲线。
+- `/api/state` 只返回 event shell 和非阻塞状态。
+- `/api/market/<condition_id>?side=YES|NO` 单独加载 live CLOB quote，避免首屏被慢
+  盘口请求卡住，并把 forecast/chart 概率转换到当前 token side。
+- 顶部提供 Dark/Light toggle；dark mode 使用接近 Polymarket 的黑色风格。
+- GUI runtime 状态仍保存在 ignored 的 `data/gui_state.json`。
+
+主要文件：
+
+- `gui/server.py`
+- `gui/web/index.html`
+- `gui/web/app.js`
+- `gui/web/styles.css`
+- `scripts/run_gui.py`
+
 ## 数据库当前状态
 
 数据库路径：
 
 ```text
+data/beatodds.duckdb
 data/eval.duckdb
 ```
 
-该路径被 git ignore。它是本地运行状态，不应提交。
+这些路径被 git ignore。它们是本地运行状态，不应提交。
 
 操作约束：
 
@@ -386,9 +426,19 @@ data/eval.duckdb
 - workflow DB 写入时会把 timezone-aware datetime 统一转成 UTC-naive。
 - 旧本地 rows 可能仍是修复前写入的 local-naive 时间，刷新市场后会被新记录覆盖。
 
-### 两层 DB 结构
+### 两类 DB 结构
 
-当前同一个 DuckDB 文件里有两层数据。
+`data/beatodds.duckdb` 是市场大盘层：
+
+- `events`：Gamma event 元数据，作为用户可理解的组织容器。
+- `events.image`、`events.icon`：event 页视觉标识。
+- `markets`：最小可交易单元，带 `condition_id` 和 `event_id`。
+- `markets.outcome_prices_json`：YES/NO 等 outcome 的当前 Gamma price，用于 GUI
+  token display。
+- `price_snapshots`、`price_history`、`resolutions`、`evidence_items`、
+  `edge_scores`：较早的通用市场数据表。
+
+`data/eval.duckdb` 是 live workflow/evaluation 层。
 
 `eval_records` 是 compact compatibility layer：
 
@@ -405,21 +455,27 @@ workflow tables 是 long-running state layer：
 
 ### 当前本地表计数
 
-2026-05-25 从 `data/eval.duckdb` 观测到：
+2026-06-03 从本地 DuckDB 观测到：
 
 | Table | Rows | 用途 |
 |---|---:|---|
-| `eval_records` | 6 | 之后计算 BSS 的 compact forecast samples |
+| `events` | 40 | 当前最新流动 market 批次关联的 Gamma events |
+| `markets` | 350 | 本地累计 market 元数据；GUI 只读最新 `fetched_at` 批次 |
+| `latest markets` | 100 | 最新一次 backfill 批次的 market 数 |
+| `events with icon` | 37 | 可用于 GUI event icon 的 Gamma event |
+| `markets with outcome prices` | 100 | 最新批次已有 YES/NO token display price |
+| `eval_records` | 14 | 之后计算 BSS 的 compact forecast samples |
 | `tracked_markets` | 1 | 长期追踪的市场状态 |
-| `market_snapshots` | 1 | 不可变盘口快照 |
+| `market_snapshots` | 3 | 不可变盘口快照 |
 | `resolution_features` | 1 | 解析后的 resolution/search features |
-| `forecast_runs` | 1 | 完整 forecast run 记录 |
-| `workflow_evidence_items` | 16 | forecast run 关联证据 |
+| `forecast_runs` | 2 | 完整 forecast run 记录 |
+| `workflow_evidence_items` | 27 | forecast run 关联证据 |
 | `outcomes` | 0 | 已解决 outcome |
 
-### 当前 compact eval records
+### compact eval records
 
-`uv run scripts/run_batch_eval.py --show-stored` 当前显示 6 条 unresolved records：
+`uv run scripts/run_batch_eval.py --show-stored` 可查看当前 compact records。
+2026-06-03 本地共有 14 条 `eval_records`。下面是早期 live run 的示例片段：
 
 | condition id prefix | `p_m` | `p_f` | edge | model | resolved |
 |---|---:|---:|---:|---|---|
@@ -433,12 +489,12 @@ workflow tables 是 long-running state layer：
 当前 edge summary：
 
 ```text
-n = 6
-mean_edge = -0.0372
-mean_abs_edge = 0.0516
+n = 14
+mean_edge = -0.0188
+mean_abs_edge = 0.0249
 max_edge = +0.0305
 min_edge = -0.1105
-pct |edge| > 3% = 66.7%
+pct |edge| > 3% = 35.7%
 ```
 
 当前没有 resolved rows，所以：
@@ -459,9 +515,9 @@ No resolved records yet. Run after markets settle and use --resolve.
 
 ```text
 tracked_markets = 1
-market_snapshots = 1
-forecast_runs = 1
-evidence_items = 16
+market_snapshots = 3
+forecast_runs = 2
+evidence_items = 27
 outcomes = 0
 ```
 
@@ -480,43 +536,42 @@ resolved = None
 condition_type = election
 search_queries =
   JD Vance 2028 presidential campaign
-  2028 US presidential election polls
-  2028 election candidates Republican
-  JD Vance VP 2024
+  2028 US presidential election candidates
+  2028 election polls JD Vance
 ```
 
 已存 snapshot：
 
 ```text
-snapshot_time = 2026-05-25T13:44:01.422388
+snapshot_time = 2026-05-25T11:54:15.453810
 p_m = 0.190
 bid = 0.189
 ask = 0.190
 spread = 0.001
-flags = neg_risk
+flags = refresh
 ```
 
-已存 forecast run：
+最新 forecast run：
 
 ```text
-run_id prefix = b60e932d
+run_id prefix = 9a8c9fdf
 signal_type = search_only_llm
 model = deepseek-chat
 p_m = 0.190
-p_f = 0.220
-edge = +0.030
-confidence = 0.40
+p_f = 0.150
+edge = -0.040
+confidence = 0.30
 ```
 
 最新 evidence 样例：
 
 | score | query | source/title |
 |---:|---|---|
-| 1.000 | `JD Vance 2028 presidential campaign` | `ballotpedia.org: J.D. Vance - Ballotpedia` |
-| 1.000 | `JD Vance 2028 presidential campaign` | `en.wikipedia.org: 2028 United States presidential election - Wikipedia` |
-| 1.000 | `JD Vance 2028 presidential campaign` | `polymarket.com: Presidential Election Winner 2028 Predictions & Odds` |
-| 0.999 | `JD Vance 2028 presidential campaign` | `apnews.com: Who is JD Vance, Trump's pick for VP?` |
-| 0.999 | `JD Vance 2028 presidential campaign` | `realclearpolling.com: Latest Polls 2028` |
+| 1.000 | `2028 election polls JD Vance` | `newsweek.com: JD Vance's 2028 presidential election chances plunge in new poll` |
+| 1.000 | `2028 election polls JD Vance` | `zogbyanalytics.com: JD Vance’s Chances of Beating Harris, Newsom in 2028 Election` |
+| 1.000 | `2028 election polls JD Vance` | `sports.yahoo.com: Kamala Harris’ Chances of Beating JD Vance, New 2028 Poll Shows` |
+| 0.999 | `2028 US presidential election candidates` | `ballotpedia.org: Presidential candidates, 2028` |
+| 0.999 | `2028 US presidential election candidates` | `ballotpedia.org: List of registered 2028 presidential candidates` |
 
 due-market 状态：
 
@@ -727,7 +782,8 @@ Compact eval store：
 
 - 没有自动 outcome resolver。
 - 没有 `eval_metrics` 表。
-- 没有现有 DuckDB 文件的 schema migration layer。
+- 只有轻量 schema migration：`markets.event_id`、`markets.outcome_prices_json`、
+  `events.image`、`events.icon` 可自动补列；还没有完整版本化 migration layer。
 - 没有 `--forecast-due` 命令。
 - 没有 tracked due markets 的 current-price refresh。
 - 没有 prompt hash 或 raw prompt storage。
@@ -738,5 +794,5 @@ Compact eval store：
 
 1. 为 tracked due markets 刷新当前 order-book snapshots。
 2. 在 snapshot refresh 后增加 `--forecast-due`。
-3. 增加本地 DuckDB schema migration safety。
+3. 增加完整、版本化的本地 DuckDB schema migration safety。
 4. 在 forecast records 和 metrics 中增加 baseline-family grouping。

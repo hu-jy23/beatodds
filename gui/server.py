@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import duckdb
 from loguru import logger
@@ -28,6 +28,9 @@ ASSET_DIR = ROOT / "gui" / "web"
 class GuiState:
     tracked_ids: list[str]
     selected_id: str | None
+    selected_event_id: str | None
+    selected_market_id: str | None
+    selected_side: str
     notes: list[dict]
     actions: list[dict]
     deals: list[dict]
@@ -46,11 +49,15 @@ class GuiStore:
     def load(self) -> GuiState:
         with self._lock:
             if not self.path.exists():
-                return GuiState([], None, [], [], [], [], [], [])
+                return GuiState([], None, None, None, "YES", [], [], [], [], [], [])
             data = json.loads(self.path.read_text(encoding="utf-8"))
+            selected_market_id = data.get("selected_market_id") or data.get("selected_id")
             return GuiState(
                 tracked_ids=list(data.get("tracked_ids", [])),
-                selected_id=data.get("selected_id"),
+                selected_id=selected_market_id,
+                selected_event_id=data.get("selected_event_id"),
+                selected_market_id=selected_market_id,
+                selected_side=_side(data.get("selected_side")),
                 notes=list(data.get("notes", [])),
                 actions=list(data.get("actions", [])),
                 deals=list(data.get("deals", [])),
@@ -61,6 +68,8 @@ class GuiStore:
 
     def save(self, state: GuiState) -> None:
         with self._lock:
+            state.selected_id = state.selected_market_id
+            state.selected_side = _side(state.selected_side)
             self.path.write_text(json.dumps(asdict(state), indent=2), encoding="utf-8")
 
     def append_action(self, kind: str, condition_id: str, payload: dict | None = None) -> None:
@@ -91,76 +100,373 @@ class GuiData:
     def eval_db(self) -> Path:
         return self.cfg.data_dir / "eval.duckdb"
 
-    def state_payload(self) -> dict:
+    def _columns(self, conn, table: str) -> set[str]:
+        try:
+            return {row[1] for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+        except Exception:
+            return set()
+
+    def _event_meta(self) -> dict[str, dict]:
+        if not self.market_db.exists():
+            return {}
+        try:
+            with duckdb.connect(str(self.market_db), read_only=True) as conn:
+                tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+                if "events" not in tables:
+                    return {}
+                columns = self._columns(conn, "events")
+                image_select = "image" if "image" in columns else "'' AS image"
+                icon_select = "icon" if "icon" in columns else "'' AS icon"
+                rows = conn.execute(
+                    f"""
+                    SELECT event_id, title, slug, category, tags_json, end_time,
+                           volume_24h, liquidity, active, description,
+                           {image_select}, {icon_select}
+                    FROM events
+                    """
+                ).fetchall()
+        except Exception:
+            return {}
+        meta: dict[str, dict] = {}
+        for row in rows:
+            try:
+                tags = json.loads(row[4] or "[]")
+            except json.JSONDecodeError:
+                tags = []
+            meta[row[0]] = {
+                "event_id": row[0],
+                "title": row[1] or "",
+                "slug": row[2] or "",
+                "category": row[3] or "Uncategorized",
+                "tags": tags if isinstance(tags, list) else [],
+                "end_time": _iso(row[5]),
+                "volume_24h": float(row[6] or 0),
+                "liquidity": float(row[7] or 0),
+                "active": bool(row[8]),
+                "description": row[9] or "",
+                "image": row[10] or "",
+                "icon": row[11] or "",
+            }
+        return meta
+
+    def _market_by_id(self, condition_id: str) -> dict | None:
+        if not condition_id:
+            return None
+        if not self.market_db.exists():
+            return None
+        with duckdb.connect(str(self.market_db), read_only=True) as conn:
+            columns = self._columns(conn, "markets")
+            event_select = "event_id" if "event_id" in columns else "'' AS event_id"
+            price_select = (
+                "outcome_prices_json"
+                if "outcome_prices_json" in columns else
+                "'[]' AS outcome_prices_json"
+            )
+            row = conn.execute(
+                f"""
+                SELECT condition_id, {event_select}, question, category, neg_risk,
+                       token_yes_id, token_no_id, close_time, volume_24h, liquidity,
+                       active, slug, description, resolution_text, created_time,
+                       outcomes_json, {price_select}
+                FROM markets
+                WHERE condition_id = ?
+                LIMIT 1
+                """,
+                [condition_id],
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "condition_id": row[0],
+            "event_id": row[1] or row[0],
+            "question": row[2],
+            "category": row[3] or "Uncategorized",
+            "neg_risk": bool(row[4]),
+            "token_yes_id": row[5] or "",
+            "token_no_id": row[6] or "",
+            "close_time": _iso(row[7]),
+            "volume_24h": float(row[8] or 0),
+            "liquidity": float(row[9] or 0),
+            "active": bool(row[10]),
+            "slug": row[11] or "",
+            "description": row[12] or "",
+            "resolution_text": row[13] or "",
+            "created_time": _iso(row[14]),
+            "outcomes": _json_list(row[15]),
+            "outcome_prices": _json_float_list(row[16]),
+            "tracked": row[0] in set(self.store.load().tracked_ids),
+        }
+
+    def state_payload(self, include_live: bool = False) -> dict:
         state = self.store.load()
-        markets = self.markets()
-        selected_id = state.selected_id or (markets[0]["condition_id"] if markets else None)
-        selected = self.market_detail(selected_id, markets=markets) if selected_id else None
+        markets = self.markets(limit=800)
+        events = self.events(markets)
+
+        selected_event_id = state.selected_event_id
+        if not selected_event_id and state.selected_market_id:
+            selected_market = next(
+                (m for m in markets if m["condition_id"] == state.selected_market_id),
+                None,
+            )
+            if selected_market:
+                selected_event_id = selected_market["event_id"]
+        if not selected_event_id and events:
+            selected_event_id = events[0]["event_id"]
+
+        selected_event = (
+            self.event_detail(selected_event_id, markets=markets, events=events)
+            if selected_event_id else None
+        )
+        if selected_event is None and events:
+            selected_event_id = events[0]["event_id"]
+            selected_event = self.event_detail(selected_event_id, markets=markets, events=events)
+        event_markets = selected_event.get("markets", []) if selected_event else []
+        selected_market_id = state.selected_market_id
+        if event_markets and selected_market_id not in {m["condition_id"] for m in event_markets}:
+            selected_market_id = event_markets[0]["condition_id"]
+        selected = (
+            self.market_detail(
+                selected_market_id,
+                markets=event_markets or markets,
+                include_live=include_live,
+            )
+            if selected_market_id else None
+        )
+
+        if (
+            state.selected_event_id != selected_event_id
+            or state.selected_market_id != selected_market_id
+        ):
+            state.selected_event_id = selected_event_id
+            state.selected_market_id = selected_market_id
+            state.selected_id = selected_market_id
+            self.store.save(state)
+
         return {
             "state": asdict(state),
-            "markets": markets,
+            "events": events,
+            "markets": markets[:120],
+            "selected_event": selected_event,
             "selected": selected,
-            "stats": self.stats(markets),
+            "stats": self.stats(events, markets),
             "tracked_report": self.tracked_report(markets),
             "history": state.actions[:40],
             "notes": state.notes[:60],
         }
 
-    def markets(self) -> list[dict]:
+    def markets(self, limit: int = 120, event_id: str | None = None) -> list[dict]:
         if not self.market_db.exists():
             return []
         with duckdb.connect(str(self.market_db), read_only=True) as conn:
+            columns = self._columns(conn, "markets")
+            event_select = "event_id" if "event_id" in columns else "'' AS event_id"
+            price_select = (
+                "outcome_prices_json"
+                if "outcome_prices_json" in columns else
+                "'[]' AS outcome_prices_json"
+            )
+            filters: list[str] = []
+            params: list[object] = []
+            if "fetched_at" in columns:
+                filters.append("fetched_at = (SELECT MAX(fetched_at) FROM markets)")
+            if event_id:
+                event_key = (
+                    "COALESCE(NULLIF(event_id, ''), condition_id)"
+                    if "event_id" in columns else "condition_id"
+                )
+                filters.append(f"{event_key} = ?")
+                params.append(event_id)
+            where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+            params.append(limit)
             rows = conn.execute(
-                """
-                SELECT condition_id, question, category, neg_risk, token_yes_id, token_no_id,
-                       close_time, volume_24h, liquidity, active, slug
+                f"""
+                SELECT condition_id, {event_select}, question, category, neg_risk,
+                       token_yes_id, token_no_id, close_time, volume_24h, liquidity,
+                       active, slug, description, resolution_text, created_time,
+                       outcomes_json, {price_select}
                 FROM markets
+                {where_clause}
                 ORDER BY volume_24h DESC NULLS LAST
-                LIMIT 120
-                """
+                LIMIT ?
+                """,
+                params,
             ).fetchall()
         state = self.store.load()
         tracked = set(state.tracked_ids)
         return [
             {
                 "condition_id": row[0],
-                "question": row[1],
-                "category": row[2] or "Uncategorized",
-                "neg_risk": bool(row[3]),
-                "token_yes_id": row[4] or "",
-                "token_no_id": row[5] or "",
-                "close_time": _iso(row[6]),
-                "volume_24h": float(row[7] or 0),
-                "liquidity": float(row[8] or 0),
-                "active": bool(row[9]),
-                "slug": row[10] or "",
+                "event_id": row[1] or row[0],
+                "question": row[2],
+                "category": row[3] or "Uncategorized",
+                "neg_risk": bool(row[4]),
+                "token_yes_id": row[5] or "",
+                "token_no_id": row[6] or "",
+                "close_time": _iso(row[7]),
+                "volume_24h": float(row[8] or 0),
+                "liquidity": float(row[9] or 0),
+                "active": bool(row[10]),
+                "slug": row[11] or "",
+                "description": row[12] or "",
+                "resolution_text": row[13] or "",
+                "created_time": _iso(row[14]),
+                "outcomes": _json_list(row[15]),
+                "outcome_prices": _json_float_list(row[16]),
                 "tracked": row[0] in tracked,
             }
             for row in rows
         ]
 
+    def events(self, markets: list[dict] | None = None) -> list[dict]:
+        markets = markets if markets is not None else self.markets(limit=800)
+        meta = self._event_meta()
+        state = self.store.load()
+        tracked = set(state.tracked_ids)
+        grouped: dict[str, dict] = {}
+        for market in markets:
+            event_id = market["event_id"] or market["condition_id"]
+            event_meta = meta.get(event_id, {})
+            event = grouped.setdefault(
+                event_id,
+                {
+                    "event_id": event_id,
+                    "title": event_meta.get("title") or market["question"],
+                    "slug": event_meta.get("slug") or market["slug"],
+                    "category": event_meta.get("category") or market["category"],
+                    "tags": event_meta.get("tags", []),
+                    "description": event_meta.get("description") or market["description"],
+                    "image": event_meta.get("image") or "",
+                    "icon": event_meta.get("icon") or event_meta.get("image") or "",
+                    "end_time": event_meta.get("end_time") or market["close_time"],
+                    "volume_24h": float(event_meta.get("volume_24h") or 0),
+                    "liquidity": float(event_meta.get("liquidity") or 0),
+                    "market_volume_24h": 0.0,
+                    "market_liquidity": 0.0,
+                    "market_count": 0,
+                    "neg_risk_count": 0,
+                    "tracked_count": 0,
+                    "active": True,
+                    "markets": [],
+                },
+            )
+            event["markets"].append(market)
+            event["market_count"] += 1
+            event["market_volume_24h"] += market["volume_24h"]
+            event["market_liquidity"] += market["liquidity"]
+            event["neg_risk_count"] += 1 if market["neg_risk"] else 0
+            event["tracked_count"] += 1 if market["condition_id"] in tracked else 0
+            event["active"] = event["active"] and market["active"]
+
+        for event in grouped.values():
+            if not event["volume_24h"]:
+                event["volume_24h"] = event["market_volume_24h"]
+            if not event["liquidity"]:
+                event["liquidity"] = event["market_liquidity"]
+            event["top_markets"] = event["markets"][:4]
+            event.pop("markets")
+        return sorted(
+            grouped.values(),
+            key=lambda item: item["volume_24h"],
+            reverse=True,
+        )[:120]
+
+    def event_detail(
+        self,
+        event_id: str | None,
+        markets: list[dict] | None = None,
+        events: list[dict] | None = None,
+    ) -> dict | None:
+        if not event_id:
+            return None
+        events = events if events is not None else self.events(markets)
+        event = next((e for e in events if e["event_id"] == event_id), None)
+        event_markets = self.markets(limit=200, event_id=event_id)
+        if event is None and event_markets:
+            event = self.events(event_markets)[0]
+        if event is None:
+            return None
+
+        edge_by_market = {item["condition_id"]: item for item in self._forecast_edges()}
+        enriched_markets = []
+        for market in event_markets:
+            forecast_edge = edge_by_market.get(market["condition_id"])
+            enriched = {**market, **self._market_prices(market)}
+            if forecast_edge:
+                enriched.update({
+                    "p_f": forecast_edge["p_f"],
+                    "edge": forecast_edge["edge"],
+                    "confidence": forecast_edge["confidence"],
+                    "forecast_snapshot_time": forecast_edge["snapshot_time"],
+                })
+            enriched_markets.append(enriched)
+
+        edges = [m["edge"] for m in enriched_markets if "edge" in m]
+        primary_market = enriched_markets[0] if enriched_markets else {}
+        rules = primary_market.get("resolution_text") or primary_market.get("description") or ""
+        background = event.get("description") or primary_market.get("description") or ""
+        return {
+            **event,
+            "markets": enriched_markets,
+            "rules": rules,
+            "background": background,
+            "start_time": primary_market.get("created_time"),
+            "edge_count": len(edges),
+            "max_abs_edge": max((abs(edge) for edge in edges), default=0.0),
+            "avg_abs_edge": sum(abs(edge) for edge in edges) / len(edges) if edges else 0.0,
+        }
+
     def market_detail(
-        self, condition_id: str | None, markets: list[dict] | None = None
+        self,
+        condition_id: str | None,
+        markets: list[dict] | None = None,
+        include_live: bool = False,
+        side: str | None = None,
     ) -> dict | None:
         if not condition_id:
             return None
         market_list = markets if markets is not None else self.markets()
         market = next((m for m in market_list if m["condition_id"] == condition_id), None)
         if market is None:
+            market = self._market_by_id(condition_id)
+        if market is None:
             return None
+        side = _side(side or self.store.load().selected_side)
+        market = {**market, **self._market_prices(market)}
 
-        snapshot, snapshot_status = self._live_snapshot(market)
+        if include_live:
+            snapshot, snapshot_status = self._live_snapshot(market, side)
+        else:
+            snapshot, snapshot_status = None, {
+                "available": False,
+                "reason": "Live quote is loaded separately after the event shell renders.",
+            }
         forecast = self._latest_forecast(condition_id)
-        chart = self._chart_points(condition_id, snapshot, forecast)
+        chart = self._chart_points(condition_id, snapshot, forecast, side)
         return {
             "market": market,
+            "side": side,
             "snapshot": snapshot,
             "snapshot_status": snapshot_status,
             "forecast": forecast,
-            "analysis": self._analysis(market, snapshot, forecast),
+            "analysis": self._analysis(market, snapshot, forecast, side),
             "chart": chart,
             "evidence": self._latest_evidence(forecast.get("run_id") if forecast else None),
             "topic_logs": self.topic_logs(condition_id),
+        }
+
+    def _market_prices(self, market: dict) -> dict:
+        prices = market.get("outcome_prices") or []
+        yes_price = prices[0] if prices else None
+        no_price = prices[1] if len(prices) > 1 else (
+            1 - yes_price if yes_price is not None else None
+        )
+        return {
+            "yes_price": yes_price,
+            "no_price": no_price,
+            "yes_label": (market.get("outcomes") or ["YES"])[0]
+            if market.get("outcomes") else "YES",
+            "no_label": (market.get("outcomes") or ["YES", "NO"])[1]
+            if len(market.get("outcomes") or []) > 1 else "NO",
         }
 
     def topic_logs(self, condition_id: str) -> dict:
@@ -175,13 +481,14 @@ class GuiData:
             "special_reports": self._special_reports(condition_id=condition_id),
         }
 
-    def stats(self, markets: list[dict]) -> dict:
+    def stats(self, events: list[dict], markets: list[dict]) -> dict:
         state = self.store.load()
         categories: dict[str, int] = {}
-        for market in markets:
-            categories[market["category"]] = categories.get(market["category"], 0) + 1
+        for event in events:
+            categories[event["category"]] = categories.get(event["category"], 0) + 1
         edges = self._forecast_edges()
         return {
+            "event_count": len(events),
             "market_count": len(markets),
             "tracked_count": len(state.tracked_ids),
             "note_count": len(state.notes),
@@ -189,8 +496,8 @@ class GuiData:
             "deal_count": len(state.deals),
             "followup_count": len(state.followups),
             "review_count": len(state.reviews),
-            "total_volume_24h": sum(m["volume_24h"] for m in markets),
-            "total_liquidity": sum(m["liquidity"] for m in markets),
+            "total_volume_24h": sum(e["volume_24h"] for e in events),
+            "total_liquidity": sum(e["liquidity"] for e in events),
             "category_counts": sorted(
                 categories.items(), key=lambda item: item[1], reverse=True
             )[:8],
@@ -224,12 +531,39 @@ class GuiData:
             "special_reports": self._special_reports(),
         }
 
+    def select_event(self, event_id: str) -> dict:
+        state = self.store.load()
+        state.selected_event_id = event_id
+        detail = self.event_detail(event_id)
+        markets = detail.get("markets", []) if detail else []
+        state.selected_market_id = markets[0]["condition_id"] if markets else None
+        state.selected_id = state.selected_market_id
+        state.selected_side = "YES"
+        self.store.save(state)
+        return self.state_payload()
+
+    def select_market(self, condition_id: str, side: str | None = None) -> dict:
+        state = self.store.load()
+        market = self._market_by_id(condition_id)
+        state.selected_market_id = condition_id
+        state.selected_id = condition_id
+        state.selected_side = _side(side or state.selected_side)
+        if market:
+            state.selected_event_id = market["event_id"]
+        self.store.save(state)
+        return self.state_payload()
+
     def track(self, condition_id: str, track: bool = True) -> dict:
         state = self.store.load()
         ids = set(state.tracked_ids)
         if track:
             ids.add(condition_id)
+            state.selected_market_id = condition_id
             state.selected_id = condition_id
+            state.selected_side = _side(state.selected_side)
+            market = self._market_by_id(condition_id)
+            if market:
+                state.selected_event_id = market["event_id"]
         else:
             ids.discard(condition_id)
         state.tracked_ids = list(ids)
@@ -238,10 +572,7 @@ class GuiData:
         return self.state_payload()
 
     def select(self, condition_id: str) -> dict:
-        state = self.store.load()
-        state.selected_id = condition_id
-        self.store.save(state)
-        return self.state_payload()
+        return self.select_market(condition_id)
 
     def add_note(self, condition_id: str, text: str) -> dict:
         state = self.store.load()
@@ -256,23 +587,26 @@ class GuiData:
     def action(self, condition_id: str, action: str) -> dict:
         payload = {"label": action}
         state = self.store.load()
-        detail = self.market_detail(condition_id)
+        detail = self.market_detail(condition_id, include_live=True)
         market = detail.get("market") if detail else None
         snapshot = detail.get("snapshot") if detail else None
         analysis = detail.get("analysis") if detail else None
+        side = detail.get("side", "YES") if detail else "YES"
         if action == "paper_deal":
             net_edge = analysis.get("net_edge_estimate") if analysis else None
             size = 10
             estimated_pnl = float(net_edge or 0) * size
-            human_report = self._deal_report(market, snapshot, analysis, size, estimated_pnl)
+            human_report = self._deal_report(
+                market, snapshot, analysis, size, estimated_pnl, side
+            )
             special_report = self._special_report_for_deal(
-                market, analysis, estimated_pnl, size
+                market, analysis, estimated_pnl, size, side
             )
             deal = {
                 "at": _now(),
                 "condition_id": condition_id,
                 "question": market.get("question") if market else "",
-                "side": "YES",
+                "side": side,
                 "size": size,
                 "limit_price": snapshot.get("best_ask") if snapshot else None,
                 "market_mid": snapshot.get("midpoint") if snapshot else None,
@@ -344,6 +678,7 @@ class GuiData:
         analysis: dict | None,
         size: int,
         estimated_pnl: float,
+        side: str = "YES",
     ) -> str:
         question = market.get("question") if market else "selected market"
         ask = snapshot.get("best_ask") if snapshot else None
@@ -353,7 +688,7 @@ class GuiData:
         else:
             result = f"projected loss about ${abs(estimated_pnl):.2f}"
         return (
-            f"Simulated YES {size} on '{question}'"
+            f"Simulated {_side(side)} {size} on '{question}'"
             f"{f' at {ask:.1%}' if ask is not None else ''}. "
             f"Estimated net edge is {float(net_edge or 0):+.1%}; {result} "
             "before final settlement and execution uncertainty."
@@ -365,22 +700,24 @@ class GuiData:
         analysis: dict | None,
         estimated_pnl: float,
         size: int,
+        side: str = "YES",
     ) -> dict | None:
         if not analysis:
             return None
         net_edge = float(analysis.get("net_edge_estimate") or 0)
+        side = _side(side)
         if net_edge >= 0.20:
             severity = "gain"
             title = "Possible gain above 20%"
             body = (
-                f"YES paper deal shows {net_edge:.1%} estimated net edge; "
+                f"{side} paper deal shows {net_edge:.1%} estimated net edge; "
                 f"rough gain is ${max(0, estimated_pnl):.2f} on {size} shares."
             )
         elif net_edge <= -0.05:
             severity = "loss"
             title = "Possible loss warning"
             body = (
-                f"YES paper deal shows {net_edge:.1%} estimated net edge; "
+                f"{side} paper deal shows {net_edge:.1%} estimated net edge; "
                 f"rough loss is ${abs(estimated_pnl):.2f} on {size} shares."
             )
         elif float(analysis.get("spread") or 0) > 0.08:
@@ -443,21 +780,25 @@ class GuiData:
             ),
         }
 
-    def _live_snapshot(self, market: dict) -> tuple[dict | None, dict]:
-        token_id = market.get("token_yes_id") or market.get("token_no_id")
+    def _live_snapshot(self, market: dict, side: str = "YES") -> tuple[dict | None, dict]:
+        side = _side(side)
+        token_id = (
+            market.get("token_no_id")
+            if side == "NO" else market.get("token_yes_id")
+        ) or market.get("token_yes_id") or market.get("token_no_id")
         if not token_id:
             return None, {
                 "available": False,
                 "reason": "No CLOB token id is stored for this market.",
             }
         try:
-            snapshot = ClobReadClient().get_snapshot(market["condition_id"], token_id)
+            book = ClobReadClient().get_order_book(token_id)
         except Exception as exc:
             return None, {
                 "available": False,
                 "reason": f"CLOB order-book request failed: {exc}",
             }
-        if snapshot is None:
+        if not book:
             return None, {
                 "available": False,
                 "reason": (
@@ -465,16 +806,33 @@ class GuiData:
                     "is closed, inactive, not CLOB-enabled, or temporarily unavailable."
                 ),
             }
+        bids = _book_levels(book.get("bids") or [])
+        asks = _book_levels(book.get("asks") or [])
+        if not bids or not asks:
+            return None, {
+                "available": False,
+                "reason": "Live order book has no bid or ask levels.",
+            }
+        best_bid = bids[0]["price"]
+        best_ask = asks[0]["price"]
+        last_trade_price = _level_number(book, "last_trade_price")
+        snapshot_time = datetime.now(timezone.utc)
         return (
             {
-                "snapshot_time": _iso(snapshot.snapshot_time),
-                "midpoint": snapshot.midpoint,
-                "best_bid": snapshot.best_bid,
-                "best_ask": snapshot.best_ask,
-                "spread": snapshot.spread,
-                "last_trade_price": snapshot.last_trade_price,
+                "snapshot_time": _iso(snapshot_time),
+                "midpoint": (best_bid + best_ask) / 2,
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "spread": max(0.0, best_ask - best_bid),
+                "last_trade_price": last_trade_price,
+                "side": side,
+                "token_id": token_id,
+                "order_book": {
+                    "bids": bids,
+                    "asks": asks,
+                },
             },
-            {"available": True, "reason": "Live CLOB order book available."},
+            {"available": True, "reason": f"Live {side} CLOB order book available."},
         )
 
     def _latest_forecast(self, condition_id: str) -> dict | None:
@@ -576,8 +934,13 @@ class GuiData:
         ]
 
     def _chart_points(
-        self, condition_id: str, snapshot: dict | None, forecast: dict | None
+        self,
+        condition_id: str,
+        snapshot: dict | None,
+        forecast: dict | None,
+        side: str = "YES",
     ) -> list[dict]:
+        side = _side(side)
         points: list[dict] = []
         if self.eval_db.exists():
             try:
@@ -595,7 +958,11 @@ class GuiData:
                             [condition_id],
                         ).fetchall()
                         points.extend(
-                            {"at": _iso(row[0]), "market": float(row[1] or 0), "fair": None}
+                            {
+                                "at": _iso(row[0]),
+                                "market": _side_probability(float(row[1] or 0), side),
+                                "fair": None,
+                            }
                             for row in reversed(rows)
                         )
             except Exception:
@@ -613,13 +980,22 @@ class GuiData:
                     }
                 )
         if forecast:
+            fair = _side_probability(forecast["p_f"], side)
             for point in points:
-                point["fair"] = forecast["p_f"]
+                point["fair"] = fair
         return points
 
-    def _analysis(self, market: dict, snapshot: dict | None, forecast: dict | None) -> dict:
-        p_m = snapshot["midpoint"] if snapshot else (forecast["p_m"] if forecast else 0.0)
-        p_f = forecast["p_f"] if forecast else p_m
+    def _analysis(
+        self,
+        market: dict,
+        snapshot: dict | None,
+        forecast: dict | None,
+        side: str = "YES",
+    ) -> dict:
+        side = _side(side)
+        base_market = forecast["p_m"] if forecast else market.get("yes_price") or 0.0
+        p_m = snapshot["midpoint"] if snapshot else _side_probability(float(base_market), side)
+        p_f = _side_probability(forecast["p_f"], side) if forecast else p_m
         edge = p_f - p_m
         spread = snapshot["spread"] if snapshot else 0.0
         net_edge = abs(edge) - spread / 2 - 0.015
@@ -629,21 +1005,24 @@ class GuiData:
             stance = "Observe"
             advice = "No live order book snapshot is available; keep this market on watch."
         elif forecast and edge > lean_threshold:
-            stance = "Tend YES"
+            stance = f"Tend {side}"
             if net_edge > action_threshold:
-                advice = "Forecast exceeds market after spread and fee buffer. Size cautiously."
+                advice = (
+                    f"Forecast exceeds {side} market after spread and fee buffer. "
+                    "Size cautiously."
+                )
             else:
                 advice = (
-                    "Forecast leans above market, but the edge is not strong enough "
+                    f"Forecast leans above {side} market, but the edge is not strong enough "
                     "after spread and fee buffer."
                 )
         elif forecast and edge < -lean_threshold:
-            stance = "Tend NO"
+            stance = f"Avoid {side}"
             if net_edge > action_threshold:
-                advice = "Forecast is below market after costs. Do not buy YES at current ask."
+                advice = f"Forecast is below {side} market after costs. Do not buy at current ask."
             else:
                 advice = (
-                    "Forecast leans below market, but costs absorb most of the signal."
+                    f"Forecast leans below {side} market, but costs absorb most of the signal."
                 )
         elif market["neg_risk"]:
             stance = "Track Structure"
@@ -659,6 +1038,7 @@ class GuiData:
             "advice": advice,
             "p_m": p_m,
             "p_f": p_f,
+            "side": side,
             "edge": edge,
             "spread": spread,
             "net_edge_estimate": net_edge,
@@ -676,7 +1056,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.data.state_payload())
         if parsed.path.startswith("/api/market/"):
             condition_id = unquote(parsed.path.removeprefix("/api/market/"))
-            return self._json({"selected": self.data.market_detail(condition_id)})
+            side = parse_qs(parsed.query).get("side", [None])[0]
+            return self._json({
+                "selected": self.data.market_detail(
+                    condition_id,
+                    include_live=True,
+                    side=side,
+                ),
+            })
         if parsed.path.startswith("/assets/"):
             return self._file(parsed.path.removeprefix("/assets/"))
         return self.send_error(HTTPStatus.NOT_FOUND)
@@ -685,6 +1072,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         payload = self._read_json()
         condition_id = str(payload.get("condition_id") or "")
+        event_id = str(payload.get("event_id") or "")
+        side = str(payload.get("side") or "")
+        if parsed.path == "/api/select-event":
+            return self._json(self.data.select_event(event_id))
+        if parsed.path == "/api/select-market":
+            return self._json(self.data.select_market(condition_id, side=side))
         if parsed.path == "/api/select":
             return self._json(self.data.select(condition_id))
         if parsed.path == "/api/track":
@@ -736,6 +1129,62 @@ def _iso(value: object) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value)
+
+
+def _side(value: object) -> str:
+    text = str(value or "YES").upper()
+    return "NO" if text == "NO" else "YES"
+
+
+def _side_probability(yes_probability: float, side: str) -> float:
+    probability = max(0.0, min(1.0, float(yes_probability)))
+    return 1 - probability if _side(side) == "NO" else probability
+
+
+def _book_levels(levels: list[object]) -> list[dict]:
+    parsed: list[dict] = []
+    # CLOB v2 gives best bid/ask as the last level; display best levels first.
+    for level in reversed(levels):
+        price = _level_number(level, "price")
+        size = _level_number(level, "size")
+        if price is None or size is None:
+            continue
+        parsed.append({
+            "price": price,
+            "size": size,
+            "total": price * size,
+        })
+    return parsed
+
+
+def _level_number(level: object, key: str) -> float | None:
+    value = level.get(key) if isinstance(level, dict) else getattr(level, key, None)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _json_list(value: object) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
+def _json_float_list(value: object) -> list[float]:
+    parsed: list[float] = []
+    for item in _json_list(value):
+        try:
+            parsed.append(float(item))
+        except (TypeError, ValueError):
+            continue
+    return parsed
 
 
 def _now() -> str:

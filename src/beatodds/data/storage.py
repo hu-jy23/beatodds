@@ -62,6 +62,7 @@ class MarketStorage:
         for m in new:
             records.append({
                 "condition_id": m.condition_id,
+                "event_id": m.event_id,
                 "question": m.question,
                 "description": m.description,
                 "resolution_text": m.resolution_text,
@@ -72,6 +73,7 @@ class MarketStorage:
                 "token_no_id": m.token_no_id,
                 "outcome_count": m.outcome_count,
                 "outcomes_json": str(m.outcomes),
+                "outcome_prices_json": str(m.outcome_prices),
                 "close_time": m.close_time,
                 "created_time": m.created_time,
                 "volume_24h": m.volume_24h,
@@ -146,14 +148,14 @@ def upsert_markets_db(conn: duckdb.DuckDBPyConnection, markets: list[MarketMeta]
     for m in markets:
         conn.execute(
             """INSERT OR REPLACE INTO markets
-               (condition_id, question, description, resolution_text, category,
+               (condition_id, event_id, question, description, resolution_text, category,
                 neg_risk, neg_risk_market_id, token_yes_id, token_no_id,
-                outcome_count, outcomes_json, close_time, created_time,
+                outcome_count, outcomes_json, outcome_prices_json, close_time, created_time,
                 volume_24h, liquidity, active, slug, fetched_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (m.condition_id, m.question, m.description, m.resolution_text, m.category,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (m.condition_id, m.event_id, m.question, m.description, m.resolution_text, m.category,
              m.neg_risk, m.neg_risk_market_id, m.token_yes_id, m.token_no_id,
-             m.outcome_count, str(m.outcomes), m.close_time, m.created_time,
+             m.outcome_count, str(m.outcomes), str(m.outcome_prices), m.close_time, m.created_time,
              m.volume_24h, m.liquidity, m.active, m.slug, fetched_at),
         )
     conn.commit()

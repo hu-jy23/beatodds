@@ -8,8 +8,29 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
-# Market
+# Market / Event
 # ---------------------------------------------------------------------------
+
+class EventMeta(BaseModel):
+    event_id: str
+    title: str
+    slug: str = ""
+    ticker: str = ""
+    description: str = ""
+    image: str = ""
+    icon: str = ""
+    category: str = ""
+    tags: list[str] = Field(default_factory=list)
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    volume_24h: float = 0.0
+    liquidity: float = 0.0
+    active: bool = True
+    closed: bool = False
+    archived: bool = False
+    neg_risk: bool = False
+    market_count: int = 0
+
 
 class MarketMeta(BaseModel):
     condition_id: str
@@ -23,6 +44,7 @@ class MarketMeta(BaseModel):
     token_no_id: str = ""
     outcome_count: int = 2
     outcomes: list[str] = Field(default_factory=list)
+    outcome_prices: list[float] = Field(default_factory=list)
     close_time: datetime | None = None
     created_time: datetime | None = None
     volume_24h: float = 0.0

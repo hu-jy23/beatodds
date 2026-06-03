@@ -20,8 +20,31 @@ def get_db(db_path: str | Path | None = None) -> duckdb.DuckDBPyConnection:
 
 
 DDL = """
+CREATE TABLE IF NOT EXISTS events (
+    event_id       VARCHAR PRIMARY KEY,
+    title          VARCHAR,
+    slug           VARCHAR,
+    ticker         VARCHAR,
+    description    VARCHAR,
+    image          VARCHAR,
+    icon           VARCHAR,
+    category       VARCHAR,
+    tags_json      VARCHAR,
+    start_time     TIMESTAMPTZ,
+    end_time       TIMESTAMPTZ,
+    volume_24h     DOUBLE DEFAULT 0,
+    liquidity      DOUBLE DEFAULT 0,
+    active         BOOLEAN DEFAULT TRUE,
+    closed         BOOLEAN DEFAULT FALSE,
+    archived       BOOLEAN DEFAULT FALSE,
+    neg_risk       BOOLEAN DEFAULT FALSE,
+    market_count   INTEGER DEFAULT 0,
+    fetched_at     TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS markets (
     condition_id        VARCHAR PRIMARY KEY,
+    event_id            VARCHAR,
     question            VARCHAR,
     description         VARCHAR,
     resolution_text     VARCHAR,
@@ -32,6 +55,7 @@ CREATE TABLE IF NOT EXISTS markets (
     token_no_id         VARCHAR,
     outcome_count       INTEGER DEFAULT 2,
     outcomes_json       VARCHAR,
+    outcome_prices_json VARCHAR,
     close_time          TIMESTAMPTZ,
     created_time        TIMESTAMPTZ,
     volume_24h          DOUBLE DEFAULT 0,
@@ -98,11 +122,30 @@ CREATE TABLE IF NOT EXISTS edge_scores (
 """
 
 
+def _table_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+    return {row[1] for row in rows}
+
+
+def _ensure_column(
+    conn: duckdb.DuckDBPyConnection,
+    table: str,
+    name: str,
+    definition: str,
+) -> None:
+    if name not in _table_columns(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
 def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
     for stmt in DDL.strip().split(";"):
         stmt = stmt.strip()
         if stmt:
             conn.execute(stmt)
+    _ensure_column(conn, "markets", "event_id", "VARCHAR")
+    _ensure_column(conn, "markets", "outcome_prices_json", "VARCHAR")
+    _ensure_column(conn, "events", "image", "VARCHAR")
+    _ensure_column(conn, "events", "icon", "VARCHAR")
     conn.commit()
     logger.info("DuckDB schema initialized")
 
