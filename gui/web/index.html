@@ -7,6 +7,20 @@
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
+    <header class="topbar global-topbar">
+      <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show event list">&gt;</button>
+      <div class="title-block">
+        <p class="eyebrow">Event Detail</p>
+        <h2 id="selectedTitle">Loading markets</h2>
+      </div>
+      <div class="top-actions">
+        <button class="btn secondary" id="marketsPageBtn">Markets</button>
+        <button class="btn secondary" id="userPageBtn">User</button>
+        <button class="btn secondary" id="themeToggle">Dark</button>
+        <button class="btn secondary" id="refreshBtn">Refresh</button>
+        <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
+      </div>
+    </header>
     <div class="app-shell" id="appShell">
       <aside class="rail left-rail" id="leftRail">
         <div class="rail-head">
@@ -28,19 +42,6 @@
       </aside>
 
       <main class="main-col">
-        <header class="topbar">
-          <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show event list">&gt;</button>
-          <div class="title-block">
-            <p class="eyebrow">Event Detail</p>
-            <h2 id="selectedTitle">Loading markets</h2>
-          </div>
-          <div class="top-actions">
-            <button class="btn secondary" id="themeToggle">Dark</button>
-            <button class="btn secondary" id="refreshBtn">Refresh</button>
-            <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
-          </div>
-        </header>
-
         <section class="analysis-panel">
           <div class="event-hero">
             <div class="event-icon" id="eventIcon">BO</div>
@@ -192,6 +193,190 @@
         </section>
       </aside>
     </div>
+
+    <section class="user-page hidden" id="userPage">
+      <aside class="user-sidebar">
+        <div class="user-card">
+          <div class="user-avatar" id="userAvatar">BO</div>
+          <div>
+            <p class="eyebrow">Paper Account</p>
+            <h2 id="userName">Demo</h2>
+            <span id="userAccountId">--</span>
+          </div>
+        </div>
+        <nav class="user-nav" aria-label="User sections">
+          <button class="user-nav-btn active" data-user-section="overview">Overview</button>
+          <button class="user-nav-btn" data-user-section="profile">基础设置</button>
+          <button class="user-nav-btn" data-user-section="funds">资金管理</button>
+          <button class="user-nav-btn" data-user-section="positions">持仓与交易</button>
+          <button class="user-nav-btn" data-user-section="agent">Agent Pattern</button>
+        </nav>
+        <div class="account-switcher">
+          <div class="panel-head tight">
+            <h3>Switch User</h3>
+            <span>local accounts</span>
+          </div>
+          <div class="account-list" id="accountList"></div>
+          <div class="create-user">
+            <input id="newAccountName" type="text" placeholder="Create user by name" />
+            <button class="btn primary" id="createAccountBtn">Create</button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="user-content">
+        <section class="user-section" id="userOverviewSection">
+          <div class="user-hero">
+            <div>
+              <p class="eyebrow">Account Analytics</p>
+              <h2>Paper Trading Dashboard</h2>
+            </div>
+            <div class="pill" id="userModePill">all-in · 0 bps</div>
+          </div>
+          <div class="user-stat-grid" id="userStatGrid"></div>
+          <div class="user-grid two">
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>NAV Curve</h3>
+                <span>cash + reserved</span>
+              </div>
+              <canvas id="userNavChart" width="720" height="240"></canvas>
+            </section>
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>Recent Ledger</h3>
+                <span id="ledgerStatus">--</span>
+              </div>
+              <div class="transaction-list" id="transactionList"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="user-section hidden" id="userProfileSection">
+          <div class="detail-block user-block">
+            <div class="panel-head tight">
+              <h3>基础设置</h3>
+              <span>name / icon / notes</span>
+            </div>
+            <div class="form-grid">
+              <label>
+                <span>Name</span>
+                <input id="profileName" type="text" placeholder="User name" />
+              </label>
+              <label>
+                <span>Icon URL</span>
+                <input id="profileIconUrl" type="url" placeholder="https://..." />
+              </label>
+              <label class="wide">
+                <span>Notes</span>
+                <textarea id="profileNotes" rows="5" placeholder="Research notes for this paper account"></textarea>
+              </label>
+            </div>
+            <button class="btn primary" id="saveProfileBtn">Save profile</button>
+          </div>
+        </section>
+
+        <section class="user-section hidden" id="userFundsSection">
+          <div class="user-grid two">
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>资金管理</h3>
+                <span>local paper ledger</span>
+              </div>
+              <div class="form-grid compact">
+                <label>
+                  <span>Amount</span>
+                  <input id="fundAmount" type="number" min="0" step="1" placeholder="1000" />
+                </label>
+                <label>
+                  <span>Memo</span>
+                  <input id="fundMemo" type="text" placeholder="manual funding adjustment" />
+                </label>
+              </div>
+              <div class="action-row">
+                <button class="btn primary" id="depositBtn">Deposit</button>
+                <button class="btn danger" id="withdrawBtn">Withdraw</button>
+              </div>
+            </section>
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>Cash Breakdown</h3>
+                <span id="cashStatus">--</span>
+              </div>
+              <div class="mini-stats" id="cashBreakdown"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="user-section hidden" id="userPositionsSection">
+          <div class="user-grid two">
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>当前持仓</h3>
+                <span id="positionStatus">simulated exposure</span>
+              </div>
+              <div class="position-list" id="positionList"></div>
+            </section>
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>历史 Trade 记录</h3>
+                <span id="tradeStatus">paper deals</span>
+              </div>
+              <div class="trade-list" id="tradeList"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="user-section hidden" id="userAgentSection">
+          <div class="detail-block user-block">
+            <div class="panel-head tight">
+              <h3>Agent Trading Pattern</h3>
+              <span id="configAccountLabel">--</span>
+            </div>
+            <label>
+              <span>Sizing mode</span>
+              <select id="sizingMode">
+                <option value="all_in">All-in per trade</option>
+                <option value="fixed">Fixed notional</option>
+                <option value="fraction">Fraction of cash</option>
+              </select>
+            </label>
+            <div class="config-grid">
+              <label>
+                <span>Order fraction</span>
+                <input id="orderFraction" type="number" min="0.01" max="1" step="0.01" />
+              </label>
+              <label>
+                <span>Max order $</span>
+                <input id="maxOrderNotional" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>Min cash buffer $</span>
+                <input id="minCashBuffer" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>Fee bps</span>
+                <input id="feeRateBps" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>Slippage bps</span>
+                <input id="slippageBps" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>Total exposure $</span>
+                <input id="maxTotalExposure" type="number" min="0" step="1" />
+              </label>
+            </div>
+            <label class="check-row">
+              <input id="autoTradeEnabled" type="checkbox" />
+              <span>Allow autonomous paper orders</span>
+            </label>
+            <button class="btn primary" id="saveConfigBtn">Save config</button>
+          </div>
+        </section>
+      </main>
+    </section>
+
     <script src="/assets/app.js"></script>
   </body>
 </html>

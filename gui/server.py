@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import re
 import threading
 import webbrowser
 from dataclasses import asdict, dataclass
@@ -19,6 +20,17 @@ from loguru import logger
 
 from beatodds.common.config import get_settings
 from beatodds.data.clob_client import ClobReadClient
+from beatodds.evaluation.paper_store import (
+    create_paper_account,
+    deposit_cash,
+    ensure_default_paper_account,
+    load_account_transactions,
+    load_paper_account,
+    load_paper_accounts,
+    update_account_profile,
+    update_risk_params,
+    withdraw_cash,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "gui" / "web"
@@ -31,6 +43,7 @@ class GuiState:
     selected_event_id: str | None
     selected_market_id: str | None
     selected_side: str
+    selected_account_id: str | None
     notes: list[dict]
     actions: list[dict]
     deals: list[dict]
@@ -49,7 +62,7 @@ class GuiStore:
     def load(self) -> GuiState:
         with self._lock:
             if not self.path.exists():
-                return GuiState([], None, None, None, "YES", [], [], [], [], [], [])
+                return GuiState([], None, None, None, "YES", None, [], [], [], [], [], [])
             data = json.loads(self.path.read_text(encoding="utf-8"))
             selected_market_id = data.get("selected_market_id") or data.get("selected_id")
             return GuiState(
@@ -58,6 +71,7 @@ class GuiStore:
                 selected_event_id=data.get("selected_event_id"),
                 selected_market_id=selected_market_id,
                 selected_side=_side(data.get("selected_side")),
+                selected_account_id=data.get("selected_account_id"),
                 notes=list(data.get("notes", [])),
                 actions=list(data.get("actions", [])),
                 deals=list(data.get("deals", [])),
@@ -242,17 +256,239 @@ class GuiData:
             state.selected_id = selected_market_id
             self.store.save(state)
 
+        account_context = self.account_context()
+        state = self.store.load()
         return {
             "state": asdict(state),
             "events": events,
             "markets": markets[:120],
             "selected_event": selected_event,
             "selected": selected,
+            "account_context": account_context,
             "stats": self.stats(events, markets),
             "tracked_report": self.tracked_report(markets),
             "history": state.actions[:40],
             "notes": state.notes[:60],
         }
+
+    def account_context(self) -> dict:
+        state = self.store.load()
+        account = self._selected_account(state)
+        accounts = load_paper_accounts(limit=30)
+        if account.account_id not in {item.account_id for item in accounts}:
+            accounts.insert(0, account)
+        activity = self._account_activity(account.account_id)
+        return {
+            "selected_account_id": account.account_id,
+            "selected_account": _paper_account_dict(account),
+            "accounts": [_paper_account_dict(item) for item in accounts],
+            "transactions": activity["transactions"],
+            "nav_points": activity["nav_points"],
+            "positions": activity["positions"],
+            "position_event_groups": activity["position_event_groups"],
+            "trade_records": activity["trade_records"],
+            "trade_event_groups": activity["trade_event_groups"],
+            "user_stats": activity["user_stats"],
+        }
+
+    def create_account(self, name: str) -> dict:
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise ValueError("name is required")
+        account_id = self._unique_account_id(clean_name)
+        create_paper_account(
+            account_id=account_id,
+            name=clean_name,
+            risk_profile="research",
+            sizing_mode="all_in",
+            order_fraction=1.0,
+            fee_rate_bps=0.0,
+            slippage_bps=0.0,
+        )
+        state = self.store.load()
+        state.selected_account_id = account_id
+        self.store.save(state)
+        return self.state_payload()
+
+    def login_account(self, account_id: str) -> dict:
+        if not load_paper_account(account_id):
+            raise ValueError(f"paper account not found: {account_id}")
+        state = self.store.load()
+        state.selected_account_id = account_id
+        self.store.save(state)
+        return self.state_payload()
+
+    def update_account_config(self, payload: dict) -> dict:
+        state = self.store.load()
+        account = self._selected_account(state)
+        update_risk_params(
+            account.account_id,
+            risk_profile=str(payload.get("risk_profile") or account.risk_profile),
+            sizing_mode=str(payload.get("sizing_mode") or account.sizing_mode),
+            order_fraction=_payload_float(
+                payload, "order_fraction", account.order_fraction
+            ),
+            auto_trade_enabled=bool(payload.get("auto_trade_enabled", False)),
+            max_order_notional=_payload_float(
+                payload, "max_order_notional", account.max_order_notional
+            ),
+            max_market_exposure=_payload_float(
+                payload, "max_market_exposure", account.max_market_exposure
+            ),
+            max_event_exposure=_payload_float(
+                payload, "max_event_exposure", account.max_event_exposure
+            ),
+            max_category_exposure=_payload_float(
+                payload, "max_category_exposure", account.max_category_exposure
+            ),
+            max_total_exposure=_payload_float(
+                payload, "max_total_exposure", account.max_total_exposure
+            ),
+            min_cash_buffer=_payload_float(
+                payload, "min_cash_buffer", account.min_cash_buffer
+            ),
+            fee_rate_bps=_payload_float(payload, "fee_rate_bps", account.fee_rate_bps),
+            slippage_bps=_payload_float(payload, "slippage_bps", account.slippage_bps),
+            status=str(payload.get("status") or account.status),
+            notes=str(payload.get("notes") or account.notes),
+        )
+        return self.state_payload()
+
+    def update_account_profile(self, payload: dict) -> dict:
+        state = self.store.load()
+        account = self._selected_account(state)
+        update_account_profile(
+            account.account_id,
+            name=str(payload.get("name") or account.name),
+            icon_url=str(payload.get("icon_url") or ""),
+            notes=str(payload.get("notes") or ""),
+        )
+        return self.state_payload()
+
+    def account_funds(self, payload: dict) -> dict:
+        state = self.store.load()
+        account = self._selected_account(state)
+        amount = _payload_float(payload, "amount", 0.0)
+        memo = str(payload.get("memo") or "GUI funding action")
+        action = str(payload.get("action") or "deposit")
+        if action == "withdraw":
+            withdraw_cash(account.account_id, amount, memo=memo)
+        else:
+            deposit_cash(account.account_id, amount, memo=memo)
+        return self.state_payload()
+
+    def _account_activity(self, account_id: str) -> dict:
+        state = self.store.load()
+        transactions = [
+            _paper_transaction_dict(item)
+            for item in load_account_transactions(account_id, limit=80)
+        ]
+        nav_points = [
+            {
+                "at": item["created_at"],
+                "nav": round(item["cash_after"] + item["reserved_after"], 8),
+            }
+            for item in reversed(transactions)
+        ]
+        deals = [
+            item for item in state.deals
+            if item.get("account_id") in {account_id, None, ""}
+        ]
+        trade_records = [
+            self._enrich_trade_record(item)
+            for item in sorted(
+                deals,
+                key=lambda item: item.get("at") or "",
+                reverse=True,
+            )[:80]
+        ]
+        positions_by_key: dict[tuple[str, str, str], dict] = {}
+        for deal in trade_records:
+            key = (
+                deal.get("event_id") or deal.get("condition_id") or "",
+                deal.get("condition_id") or "",
+                deal.get("side") or "YES",
+            )
+            if not key[1]:
+                continue
+            row = positions_by_key.setdefault(
+                key,
+                {
+                    "event_id": key[0],
+                    "event_title": deal.get("event_title") or deal.get("question") or "",
+                    "condition_id": key[1],
+                    "side": key[2],
+                    "question": deal.get("question") or "",
+                    "shares": 0.0,
+                    "notional": 0.0,
+                    "estimated_pnl": 0.0,
+                    "trade_count": 0,
+                },
+            )
+            row["shares"] += float(deal.get("size") or 0)
+            row["notional"] += float(deal.get("notional") or 0)
+            row["estimated_pnl"] += float(deal.get("estimated_pnl") or 0)
+            row["trade_count"] += 1
+        positions = sorted(
+            positions_by_key.values(),
+            key=lambda item: (item["event_title"], -abs(item["notional"])),
+        )
+        event_position_groups = _event_groups(positions)
+        event_trade_groups = _event_groups(trade_records)
+        estimated_pnl = sum(float(item.get("estimated_pnl") or 0) for item in trade_records)
+        user_stats = {
+            "trade_count": len(trade_records),
+            "position_count": len(positions),
+            "estimated_pnl": round(estimated_pnl, 8),
+            "transaction_count": len(transactions),
+            "latest_nav": nav_points[-1]["nav"] if nav_points else 0.0,
+        }
+        return {
+            "transactions": transactions,
+            "nav_points": nav_points,
+            "positions": positions,
+            "position_event_groups": event_position_groups,
+            "trade_records": trade_records,
+            "trade_event_groups": event_trade_groups,
+            "user_stats": user_stats,
+        }
+
+    def _enrich_trade_record(self, deal: dict) -> dict:
+        condition_id = deal.get("condition_id") or ""
+        market = self._market_by_id(condition_id) if condition_id else None
+        event_id = (market or {}).get("event_id") or condition_id
+        event_meta = self._event_meta().get(event_id, {}) if event_id else {}
+        return {
+            **deal,
+            "event_id": event_id,
+            "event_title": (
+                event_meta.get("title")
+                or (market or {}).get("question")
+                or deal.get("question")
+                or ""
+            ),
+            "event_category": event_meta.get("category") or (market or {}).get("category") or "",
+            "question": (market or {}).get("question") or deal.get("question") or "",
+        }
+
+    def _selected_account(self, state: GuiState | None = None):
+        state = state or self.store.load()
+        account = load_paper_account(state.selected_account_id or "")
+        if account:
+            return account
+        account = ensure_default_paper_account()
+        state.selected_account_id = account.account_id
+        self.store.save(state)
+        return account
+
+    def _unique_account_id(self, name: str) -> str:
+        base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "user"
+        candidate = base
+        suffix = 2
+        while load_paper_account(candidate):
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        return candidate
 
     def markets(self, limit: int = 120, event_id: str | None = None) -> list[dict]:
         if not self.market_db.exists():
@@ -594,20 +830,25 @@ class GuiData:
         side = detail.get("side", "YES") if detail else "YES"
         if action == "paper_deal":
             net_edge = analysis.get("net_edge_estimate") if analysis else None
-            size = 10
-            estimated_pnl = float(net_edge or 0) * size
+            account = self._selected_account(state)
+            paper_order = _paper_order(account, snapshot)
+            size = paper_order["shares"]
+            estimated_pnl = float(net_edge or 0) * size - paper_order["fees"]
             human_report = self._deal_report(
-                market, snapshot, analysis, size, estimated_pnl, side
+                market, snapshot, analysis, size, estimated_pnl, side, paper_order
             )
             special_report = self._special_report_for_deal(
                 market, analysis, estimated_pnl, size, side
             )
             deal = {
                 "at": _now(),
+                "account_id": account.account_id,
                 "condition_id": condition_id,
                 "question": market.get("question") if market else "",
                 "side": side,
                 "size": size,
+                "notional": paper_order["notional"],
+                "fees": paper_order["fees"],
                 "limit_price": snapshot.get("best_ask") if snapshot else None,
                 "market_mid": snapshot.get("midpoint") if snapshot else None,
                 "net_edge_estimate": net_edge,
@@ -676,13 +917,20 @@ class GuiData:
         market: dict | None,
         snapshot: dict | None,
         analysis: dict | None,
-        size: int,
+        size: float,
         estimated_pnl: float,
         side: str = "YES",
+        paper_order: dict | None = None,
     ) -> str:
         question = market.get("question") if market else "selected market"
         ask = snapshot.get("best_ask") if snapshot else None
         net_edge = analysis.get("net_edge_estimate") if analysis else None
+        paper_order = paper_order or {}
+        notional = paper_order.get("notional")
+        fee_rate_bps = paper_order.get("fee_rate_bps")
+        execution = ""
+        if notional is not None and fee_rate_bps is not None:
+            execution = f"Notional ${notional:.2f}; fee {fee_rate_bps:.1f} bps. "
         if estimated_pnl >= 0:
             result = f"projected gain about ${estimated_pnl:.2f}"
         else:
@@ -690,6 +938,7 @@ class GuiData:
         return (
             f"Simulated {_side(side)} {size} on '{question}'"
             f"{f' at {ask:.1%}' if ask is not None else ''}. "
+            f"{execution}"
             f"Estimated net edge is {float(net_edge or 0):+.1%}; {result} "
             "before final settlement and execution uncertainty."
         )
@@ -699,7 +948,7 @@ class GuiData:
         market: dict | None,
         analysis: dict | None,
         estimated_pnl: float,
-        size: int,
+        size: float,
         side: str = "YES",
     ) -> dict | None:
         if not analysis:
@@ -1078,6 +1327,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.data.select_event(event_id))
         if parsed.path == "/api/select-market":
             return self._json(self.data.select_market(condition_id, side=side))
+        if parsed.path == "/api/create-account":
+            return self._json(self.data.create_account(str(payload.get("name") or "")))
+        if parsed.path == "/api/login":
+            return self._json(self.data.login_account(str(payload.get("account_id") or "")))
+        if parsed.path == "/api/account-config":
+            return self._json(self.data.update_account_config(payload))
+        if parsed.path == "/api/account-profile":
+            return self._json(self.data.update_account_profile(payload))
+        if parsed.path == "/api/account-funds":
+            return self._json(self.data.account_funds(payload))
         if parsed.path == "/api/select":
             return self._json(self.data.select(condition_id))
         if parsed.path == "/api/track":
@@ -1139,6 +1398,83 @@ def _side(value: object) -> str:
 def _side_probability(yes_probability: float, side: str) -> float:
     probability = max(0.0, min(1.0, float(yes_probability)))
     return 1 - probability if _side(side) == "NO" else probability
+
+
+def _paper_account_dict(account) -> dict:
+    data = account.model_dump(mode="json")
+    data["available_cash"] = round(
+        max(0.0, float(account.cash_balance) - float(account.min_cash_buffer)),
+        8,
+    )
+    data["equity"] = round(
+        float(account.cash_balance) + float(account.reserved_cash),
+        8,
+    )
+    return data
+
+
+def _paper_transaction_dict(transaction) -> dict:
+    return transaction.model_dump(mode="json")
+
+
+def _event_groups(rows: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        event_id = row.get("event_id") or row.get("condition_id") or "unknown"
+        group = grouped.setdefault(
+            event_id,
+            {
+                "event_id": event_id,
+                "event_title": row.get("event_title") or row.get("question") or event_id,
+                "event_category": row.get("event_category") or "",
+                "row_count": 0,
+                "trade_count": 0,
+                "shares": 0.0,
+                "notional": 0.0,
+                "estimated_pnl": 0.0,
+                "rows": [],
+            },
+        )
+        group["rows"].append(row)
+        group["row_count"] += 1
+        group["trade_count"] += int(row.get("trade_count") or 1)
+        group["shares"] += float(row.get("shares") or row.get("size") or 0)
+        group["notional"] += float(row.get("notional") or 0)
+        group["estimated_pnl"] += float(row.get("estimated_pnl") or 0)
+    return sorted(grouped.values(), key=lambda item: item["event_title"])
+
+
+def _payload_float(payload: dict, key: str, default: float) -> float:
+    value = payload.get(key, default)
+    if value is None or value == "":
+        return float(default)
+    return float(value)
+
+
+def _paper_order(account, snapshot: dict | None) -> dict:
+    available = max(0.0, float(account.cash_balance) - float(account.min_cash_buffer))
+    price = float((snapshot or {}).get("best_ask") or 1.0)
+    price = max(price, 0.001)
+    if account.sizing_mode == "fixed":
+        notional = min(available, float(account.max_order_notional))
+    elif account.sizing_mode == "fraction":
+        notional = available * float(account.order_fraction)
+        notional = min(notional, float(account.max_order_notional))
+    else:
+        notional = available
+    fees = notional * float(account.fee_rate_bps) / 10_000
+    slippage = notional * float(account.slippage_bps) / 10_000
+    executable_notional = max(0.0, notional - fees - slippage)
+    shares = executable_notional / price
+    return {
+        "notional": round(notional, 2),
+        "shares": round(shares, 4),
+        "fees": round(fees, 4),
+        "slippage_cost": round(slippage, 4),
+        "fee_rate_bps": float(account.fee_rate_bps),
+        "slippage_bps": float(account.slippage_bps),
+        "sizing_mode": account.sizing_mode,
+    }
 
 
 def _book_levels(levels: list[object]) -> list[dict]:

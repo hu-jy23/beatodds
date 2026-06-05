@@ -95,6 +95,30 @@ As of 2026-05-25:
   `selected_side` in `data/gui_state.json`; `/api/market/<condition_id>?side=NO`
   reads the NO token order book and converts forecast/chart probabilities to
   the NO side.
+- A paper trading workflow discussion deck now lives at
+  `docs/paper_trading_workflow_ppt.html`. It frames paper trading as a
+  long-horizon ledger with accounts, orders, fills, positions, marks, exits,
+  settlements, and discussion points for future implementation.
+- As of 2026-06-04, paper trading account infrastructure is implemented in
+  `src/beatodds/evaluation/paper_store.py`. It creates `paper_accounts` and
+  `paper_account_transactions` in `data/eval.duckdb`, supports default demo
+  account creation, account risk parameter updates, deposit/withdraw,
+  reserve/release cash, account summaries, and transaction history. CLI entry:
+  `uv run scripts/run_paper_account.py --create-default`.
+- As of 2026-06-05, account UI was moved out of the market page. The global top
+  bar switches between the Markets page and a separate User page. The User page
+  has its own sidebar for Overview, profile settings, funding, positions/trade
+  history, and Agent Pattern config. Login lists local `paper_accounts` and
+  switches accounts without passwords; creating a user only requires a name.
+  Funding writes `paper_account_transactions`. Agent Pattern writes sizing
+  mode, order fraction, fee/slippage, exposure limits, cash buffer, and the
+  autonomous paper order switch back to `paper_accounts`. Default sizing is
+  all-in per trade with 0 fee/slippage. Simulated GUI paper deals read the
+  selected account config to estimate notional, shares, fees, and projected
+  PnL; positions/trades currently aggregate those simulated paper deals until
+  formal `paper_orders`, `paper_fills`, and `paper_positions` exist. Future
+  account features should extend the User page instead of crowding the market
+  event page.
 - Current uncommitted development includes:
   - `scripts/run_forecast.py`: sports and probability filters.
   - `scripts/run_batch_eval.py`: batch forecasting, stored records, manual
@@ -116,7 +140,8 @@ As of 2026-05-25:
 - `.env` contains local API keys and must never be committed.
 - DuckDB file locking matters: do not run two CLI commands that open
   `data/eval.duckdb` in parallel. Run `--show-stored`, `--show-workflow`, and
-  batch evaluation commands serially.
+  batch evaluation commands serially. Run `scripts/run_paper_account.py`
+  serially with those commands too.
 - Workflow DB writes now normalize timezone-aware datetimes to UTC-naive before
   insertion. Older local rows written before this fix may have local-naive
   timestamps until the market is refreshed by a new forecast run.
@@ -131,12 +156,15 @@ uv run ruff check .
 uv run pytest -q
 node --check gui/web/app.js
 uv run python -m py_compile gui/server.py src/beatodds/data/indexers.py src/beatodds/data/storage.py
+uv run python -m py_compile src/beatodds/evaluation/paper_store.py scripts/run_paper_account.py
 uv run scripts/run_batch_eval.py --show-stored
 uv run scripts/run_batch_eval.py --compute-bss
 uv run scripts/run_batch_eval.py --show-workflow
 uv run scripts/run_batch_eval.py --show-market 0x7ad403c3508f8e3912940fd1a913f227591145ca0614074208e0b962d5fcc422
 uv run scripts/run_batch_eval.py --show-due --stale-hours 24 --top 10
 uv run scripts/backfill_markets.py --incremental
+uv run scripts/run_paper_account.py --create-default
+uv run scripts/run_paper_account.py --show --transactions
 ```
 
 Observed live eval state:

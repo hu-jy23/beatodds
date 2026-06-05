@@ -7,6 +7,10 @@ const app = {
   filter: "all",
   search: "",
   theme: localStorage.getItem("beatodds-theme") || "light",
+  page: localStorage.getItem("beatodds-page") || "markets",
+  userSection: localStorage.getItem("beatodds-user-section") || "overview",
+  expandedPositionEvents: new Set(),
+  expandedTradeEvents: new Set(),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -69,7 +73,7 @@ async function loadState() {
   app.selectedMarketId = app.state.selected?.market?.condition_id || app.state.state.selected_market_id;
   app.selectedSide = app.state.selected?.side || app.state.state.selected_side || app.selectedSide || "YES";
   render();
-  refreshSelectedMarketDetail();
+  if (app.page === "markets") refreshSelectedMarketDetail();
 }
 
 async function post(path, payload) {
@@ -78,7 +82,7 @@ async function post(path, payload) {
   app.selectedMarketId = app.state.selected?.market?.condition_id || app.selectedMarketId;
   app.selectedSide = app.state.selected?.side || app.state.state.selected_side || app.selectedSide || "YES";
   render();
-  refreshSelectedMarketDetail();
+  if (app.page === "markets") refreshSelectedMarketDetail();
 }
 
 async function refreshSelectedMarketDetail() {
@@ -100,16 +104,34 @@ async function refreshSelectedMarketDetail() {
 }
 
 function render() {
+  renderPage();
+  renderAccountControls();
   renderMetrics();
   renderMarkets();
   renderSelected();
   renderConsoles();
   renderTimeline();
+  renderUserPage();
   renderCharts();
+}
+
+function renderPage() {
+  const isUser = app.page === "user";
+  $("appShell").classList.toggle("hidden", isUser);
+  $("userPage").classList.toggle("hidden", !isUser);
+  $("marketsPageBtn").classList.toggle("active", !isUser);
+  $("userPageBtn").classList.toggle("active", isUser);
+  if (isUser) {
+    const account = app.state?.account_context?.selected_account || {};
+    $("selectedTitle").textContent = account.name ? `User: ${account.name}` : "User";
+  } else if (app.state?.selected_event) {
+    $("selectedTitle").textContent = app.state.selected_event.title;
+  }
 }
 
 function renderMetrics() {
   const stats = app.state.stats || {};
+  const account = app.state.account_context?.selected_account || {};
   const items = [
     ["Events", stats.event_count || 0],
     ["Markets", stats.market_count || 0],
@@ -119,9 +141,9 @@ function renderMetrics() {
     .map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`)
     .join("");
   $("consoleSummary").innerHTML = [
-    ["Notes", stats.note_count || 0],
-    ["Actions", stats.action_count || 0],
-    ["Paper deals", stats.deal_count || 0],
+    ["Cash", fmtMoney(account.cash_balance)],
+    ["Reserved", fmtMoney(account.reserved_cash)],
+    ["Fee", `${Number(account.fee_rate_bps || 0).toFixed(0)} bps`],
   ]
     .map(
       ([label, value]) => `
@@ -132,6 +154,187 @@ function renderMetrics() {
       `,
     )
     .join("");
+}
+
+function renderAccountControls() {
+  const context = app.state.account_context || {};
+  const account = context.selected_account || {};
+  const accounts = context.accounts || [];
+  const activeLabel = account.name || account.account_id || "No user";
+  $("userPageBtn").textContent = account.name ? activeLabel : "User";
+  $("configAccountLabel").textContent = account.account_id
+    ? `${activeLabel} · ${fmtMoney(account.available_cash)} available`
+    : "--";
+
+  $("accountList").innerHTML = accounts.length
+    ? accounts
+        .map((item) => `
+          <button class="account-row ${item.account_id === account.account_id ? "active" : ""}" data-account-id="${escapeAttr(item.account_id)}">
+            <strong>${escapeHtml(item.name || item.account_id)}</strong>
+            <span>${fmtMoney(item.cash_balance)} cash · ${escapeHtml(item.sizing_mode || "all_in")} · fee ${Number(item.fee_rate_bps || 0).toFixed(0)} bps</span>
+          </button>
+        `)
+        .join("")
+    : `<div class="empty-panel">No paper users yet.</div>`;
+  document.querySelectorAll(".account-row[data-account-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      app.loginOpen = false;
+      await post("/api/login", { account_id: button.dataset.accountId });
+    });
+  });
+
+  $("sizingMode").value = account.sizing_mode || "all_in";
+  $("orderFraction").value = account.order_fraction ?? 1;
+  $("maxOrderNotional").value = account.max_order_notional ?? account.initial_cash ?? 0;
+  $("minCashBuffer").value = account.min_cash_buffer ?? 0;
+  $("feeRateBps").value = account.fee_rate_bps ?? 0;
+  $("slippageBps").value = account.slippage_bps ?? 0;
+  $("maxTotalExposure").value = account.max_total_exposure ?? account.initial_cash ?? 0;
+  $("autoTradeEnabled").checked = Boolean(account.auto_trade_enabled);
+}
+
+function renderUserPage() {
+  const context = app.state.account_context || {};
+  const account = context.selected_account || {};
+  const stats = context.user_stats || {};
+  const transactions = context.transactions || [];
+  const positions = context.positions || [];
+  const trades = context.trade_records || [];
+  const positionGroups = context.position_event_groups || [];
+  const tradeGroups = context.trade_event_groups || [];
+  const icon = account.icon_url || "";
+  $("userAvatar").innerHTML = icon
+    ? `<img src="${escapeAttr(icon)}" alt="" loading="lazy" />`
+    : `<span>${escapeHtml(initials(account.name || account.account_id))}</span>`;
+  $("userName").textContent = account.name || "Paper User";
+  $("userAccountId").textContent = account.account_id || "--";
+  $("userModePill").textContent =
+    `${account.sizing_mode || "all_in"} · fee ${Number(account.fee_rate_bps || 0).toFixed(0)} bps`;
+  $("profileName").value = account.name || "";
+  $("profileIconUrl").value = account.icon_url || "";
+  $("profileNotes").value = account.notes || "";
+
+  document.querySelectorAll(".user-nav-btn").forEach((button) => {
+    button.classList.toggle("active", button.dataset.userSection === app.userSection);
+  });
+  const sectionIds = {
+    overview: "userOverviewSection",
+    profile: "userProfileSection",
+    funds: "userFundsSection",
+    positions: "userPositionsSection",
+    agent: "userAgentSection",
+  };
+  Object.entries(sectionIds).forEach(([key, id]) => {
+    $(id).classList.toggle("hidden", key !== app.userSection);
+  });
+
+  $("userStatGrid").innerHTML = [
+    ["Equity", fmtMoney(account.equity), "cash + reserved"],
+    ["Available", fmtMoney(account.available_cash), "after cash buffer"],
+    ["Reserved", fmtMoney(account.reserved_cash), "open reserves"],
+    ["Trades", String(stats.trade_count || 0), `${stats.position_count || 0} simulated positions`],
+    ["Est. PnL", fmtSignedMoney(stats.estimated_pnl || 0), "from GUI paper deals"],
+    ["Ledger rows", String(stats.transaction_count || 0), "account transactions"],
+  ]
+    .map(([label, value, detail]) => `
+      <div class="user-stat">
+        <span>${label}</span>
+        <strong>${escapeHtml(value)}</strong>
+        <p>${escapeHtml(detail)}</p>
+      </div>
+    `)
+    .join("");
+
+  $("ledgerStatus").textContent = `${transactions.length} rows`;
+  $("transactionList").innerHTML = transactions.length
+    ? transactions.slice(0, 24).map((tx) => `
+        <div class="transaction-row">
+          <strong>${escapeHtml(tx.transaction_type)}</strong>
+          <span>${tx.created_at ? new Date(tx.created_at).toLocaleString() : ""}</span>
+          <b>${fmtSignedMoney(tx.cash_delta)}</b>
+          <small>cash ${fmtMoney(tx.cash_after)} · reserved ${fmtMoney(tx.reserved_after)} · ${escapeHtml(tx.memo || "")}</small>
+        </div>
+      `).join("")
+    : `<div class="empty-panel">No ledger rows.</div>`;
+
+  $("cashStatus").textContent = `${account.base_currency || "USD"} paper cash`;
+  $("cashBreakdown").innerHTML = [
+    ["Cash", fmtMoney(account.cash_balance)],
+    ["Reserved", fmtMoney(account.reserved_cash)],
+    ["Buffer", fmtMoney(account.min_cash_buffer)],
+  ]
+    .map(([label, value]) => `<div class="mini-stat"><span>${label}</span><strong>${value}</strong></div>`)
+    .join("");
+
+  $("positionStatus").textContent = `${positions.length} simulated positions`;
+  $("positionList").innerHTML = positionGroups.length
+    ? renderEventPositionGroups(positionGroups)
+    : `<div class="empty-panel">No formal positions yet. Simulated paper deals will aggregate here.</div>`;
+
+  $("tradeStatus").textContent = `${trades.length} records`;
+  $("tradeList").innerHTML = tradeGroups.length
+    ? renderEventTradeGroups(tradeGroups)
+    : `<div class="empty-panel">No paper trade records yet.</div>`;
+
+  if (app.page === "user") drawUserNavChart($("userNavChart"), context.nav_points || []);
+}
+
+function renderEventPositionGroups(groups) {
+  return groups.map((group) => `
+    <section class="event-exposure-card ${app.expandedPositionEvents.has(group.event_id) ? "expanded" : ""}">
+      <button class="event-exposure-head" type="button" data-exposure-kind="position" data-event-id="${escapeAttr(group.event_id)}">
+        <span>
+          <strong>${escapeHtml(group.event_title || group.event_id)}</strong>
+          <small>${escapeHtml(group.event_category || "Event")} · ${group.row_count} markets · ${group.trade_count} trades</small>
+        </span>
+        <span class="event-exposure-actions">
+          <b class="${Number(group.estimated_pnl || 0) >= 0 ? "positive" : "negative"}">${fmtSignedMoney(group.estimated_pnl)}</b>
+          <small>${app.expandedPositionEvents.has(group.event_id) ? "Hide markets" : "Show markets"}</small>
+        </span>
+      </button>
+      <div class="event-exposure-body">
+        ${(group.rows || []).map((pos) => `
+          <div class="market-exposure-row">
+            <span>
+              <strong>${escapeHtml(pos.question || shortId(pos.condition_id))}</strong>
+              <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · ${pos.trade_count || 0} trades</small>
+            </span>
+            <span>${fmtMoney(pos.notional)} notional</span>
+            <b class="${Number(pos.estimated_pnl || 0) >= 0 ? "positive" : "negative"}">${fmtSignedMoney(pos.estimated_pnl)}</b>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `).join("");
+}
+
+function renderEventTradeGroups(groups) {
+  return groups.map((group) => `
+    <section class="event-exposure-card ${app.expandedTradeEvents.has(group.event_id) ? "expanded" : ""}">
+      <button class="event-exposure-head" type="button" data-exposure-kind="trade" data-event-id="${escapeAttr(group.event_id)}">
+        <span>
+          <strong>${escapeHtml(group.event_title || group.event_id)}</strong>
+          <small>${escapeHtml(group.event_category || "Event")} · ${group.trade_count} trade records</small>
+        </span>
+        <span class="event-exposure-actions">
+          <b class="${Number(group.estimated_pnl || 0) >= 0 ? "positive" : "negative"}">${fmtSignedMoney(group.estimated_pnl)}</b>
+          <small>${app.expandedTradeEvents.has(group.event_id) ? "Hide trades" : "Show trades"}</small>
+        </span>
+      </button>
+      <div class="event-exposure-body">
+        ${(group.rows || []).map((trade) => `
+          <div class="market-exposure-row">
+            <span>
+              <strong>${escapeHtml(trade.question || shortId(trade.condition_id))}</strong>
+              <small>${trade.at ? new Date(trade.at).toLocaleString() : ""}</small>
+            </span>
+            <span>${escapeHtml(trade.side || "YES")} ${fmtSize(trade.size)} · ${fmtMoney(trade.notional)}</span>
+            <b class="${Number(trade.estimated_pnl || 0) >= 0 ? "positive" : "negative"}">${fmtSignedMoney(trade.estimated_pnl)}</b>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `).join("");
 }
 
 function renderMarkets() {
@@ -192,7 +395,7 @@ function renderSelected() {
   const side = selected?.side || app.selectedSide || "YES";
   app.selectedSide = side;
 
-  $("selectedTitle").textContent = event.title;
+  if (app.page !== "user") $("selectedTitle").textContent = event.title;
   $("stance").textContent = event.category || "Event";
   $("edgePill").textContent = `${event.edge_count || 0} forecasts`;
   $("edgePill").className = `pill ${(event.max_abs_edge || 0) > 0.02 ? "good" : ""}`;
@@ -675,6 +878,25 @@ function drawTrackedChart(canvas, categories) {
   });
 }
 
+function drawUserNavChart(canvas, points) {
+  const ctx = setupCanvas(canvas);
+  clearChart(ctx, canvas, "Account NAV");
+  const values = (points || []).map((point) => Number(point.nav || 0));
+  if (!values.length) {
+    ctx.fillStyle = cssVar("--muted");
+    ctx.font = "12px system-ui";
+    ctx.fillText("No NAV history yet", 12, 54);
+    return;
+  }
+  const pad = 34;
+  const min = Math.min(...values) * 0.98;
+  const max = Math.max(...values) * 1.02 || 1;
+  drawLine(ctx, values, min, max, pad, ctx.logicalWidth, ctx.logicalHeight, "#25c383");
+  ctx.fillStyle = cssVar("--muted");
+  ctx.font = "11px system-ui";
+  ctx.fillText(fmtMoney(values[values.length - 1]), 12, ctx.logicalHeight - 12);
+}
+
 function setupCanvas(canvas) {
   const scale = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -756,6 +978,26 @@ function escapeAttr(value) {
   return escapeHtml(value || "#");
 }
 
+function setPage(page) {
+  app.page = page === "user" ? "user" : "markets";
+  localStorage.setItem("beatodds-page", app.page);
+  render();
+  if (app.page === "markets") refreshSelectedMarketDetail();
+}
+
+function setUserSection(section) {
+  app.userSection = section || "overview";
+  localStorage.setItem("beatodds-user-section", app.userSection);
+  renderUserPage();
+}
+
+function toggleExposureEvent(kind, eventId) {
+  const target = kind === "trade" ? app.expandedTradeEvents : app.expandedPositionEvents;
+  if (target.has(eventId)) target.delete(eventId);
+  else target.add(eventId);
+  renderUserPage();
+}
+
 function bindEvents() {
   applyTheme(app.theme);
   if (window.innerWidth < 980) {
@@ -772,6 +1014,52 @@ function bindEvents() {
     button.addEventListener("pointerdown", () => animateClick(button));
   });
   $("refreshBtn").addEventListener("click", loadState);
+  $("marketsPageBtn").addEventListener("click", () => setPage("markets"));
+  $("userPageBtn").addEventListener("click", () => setPage("user"));
+  document.querySelectorAll(".user-nav-btn").forEach((button) => {
+    button.addEventListener("click", () => setUserSection(button.dataset.userSection));
+  });
+  $("createAccountBtn").addEventListener("click", async () => {
+    const name = $("newAccountName").value.trim();
+    if (!name) return;
+    $("newAccountName").value = "";
+    await post("/api/create-account", { name });
+  });
+  $("saveProfileBtn").addEventListener("click", async () => {
+    await post("/api/account-profile", {
+      name: $("profileName").value,
+      icon_url: $("profileIconUrl").value,
+      notes: $("profileNotes").value,
+    });
+  });
+  $("depositBtn").addEventListener("click", async () => {
+    await post("/api/account-funds", {
+      action: "deposit",
+      amount: Number($("fundAmount").value || 0),
+      memo: $("fundMemo").value || "GUI deposit",
+    });
+    $("fundAmount").value = "";
+  });
+  $("withdrawBtn").addEventListener("click", async () => {
+    await post("/api/account-funds", {
+      action: "withdraw",
+      amount: Number($("fundAmount").value || 0),
+      memo: $("fundMemo").value || "GUI withdraw",
+    });
+    $("fundAmount").value = "";
+  });
+  $("saveConfigBtn").addEventListener("click", async () => {
+    await post("/api/account-config", {
+      sizing_mode: $("sizingMode").value,
+      order_fraction: Number($("orderFraction").value || 1),
+      max_order_notional: Number($("maxOrderNotional").value || 0),
+      min_cash_buffer: Number($("minCashBuffer").value || 0),
+      fee_rate_bps: Number($("feeRateBps").value || 0),
+      slippage_bps: Number($("slippageBps").value || 0),
+      max_total_exposure: Number($("maxTotalExposure").value || 0),
+      auto_trade_enabled: $("autoTradeEnabled").checked,
+    });
+  });
   $("themeToggle").addEventListener("click", () => {
     applyTheme(app.theme === "dark" ? "light" : "dark");
   });
@@ -805,6 +1093,16 @@ function bindEvents() {
   $("reviewBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedMarketId, action: "reviewed" }));
   $("clearTopicBtn").addEventListener("click", () => post("/api/clear-topic", { condition_id: app.selectedMarketId }));
   $("clearAllBtn").addEventListener("click", () => post("/api/clear-all", {}));
+  $("positionList").addEventListener("click", (event) => {
+    const button = event.target.closest(".event-exposure-head[data-event-id]");
+    if (!button) return;
+    toggleExposureEvent("position", button.dataset.eventId);
+  });
+  $("tradeList").addEventListener("click", (event) => {
+    const button = event.target.closest(".event-exposure-head[data-event-id]");
+    if (!button) return;
+    toggleExposureEvent("trade", button.dataset.eventId);
+  });
   $("saveNoteBtn").addEventListener("click", async () => {
     const text = $("noteInput").value;
     $("noteInput").value = "";
