@@ -131,6 +131,17 @@ As of 2026-05-25:
   formal `paper_orders`, `paper_fills`, and `paper_positions` exist. Future
   account features should extend the User page instead of crowding the market
   event page.
+- As of 2026-06-06, the formal paper trading ledger exists. `paper_store.py`
+  now creates `paper_orders`, `paper_fills`, and `paper_positions`, records
+  simulated buy fills as cash-debiting `trade` transactions, and aggregates
+  positions by account/condition/side. Live paper trading entry point:
+  `uv run scripts/run_paper_trader.py --top 5`. It creates/uses the
+  `paper-live-1000` account with $1000 starting capital, runs the scanner,
+  parser, Tavily retriever, and LLM forecaster, buys YES or NO only when
+  executable ask-depth edge passes thresholds, persists workflow/eval records,
+  and appends every decision including skips to `data/paper_decisions.jsonl`.
+  Inspection entry point:
+  `uv run scripts/run_paper_account.py --account-id paper-live-1000 --show --orders --positions --transactions`.
 - Current uncommitted development includes:
   - `scripts/run_forecast.py`: sports and probability filters.
   - `scripts/run_batch_eval.py`: batch forecasting, stored records, manual
@@ -169,6 +180,7 @@ uv run pytest -q
 node --check gui/web/app.js
 uv run python -m py_compile gui/server.py src/beatodds/data/indexers.py src/beatodds/data/storage.py
 uv run python -m py_compile src/beatodds/evaluation/paper_store.py scripts/run_paper_account.py
+uv run python -m py_compile scripts/run_paper_trader.py
 uv run scripts/run_batch_eval.py --show-stored
 uv run scripts/run_batch_eval.py --compute-bss
 uv run scripts/run_batch_eval.py --show-workflow
@@ -177,6 +189,7 @@ uv run scripts/run_batch_eval.py --show-due --stale-hours 24 --top 10
 uv run scripts/backfill_markets.py --incremental
 uv run scripts/run_paper_account.py --create-default
 uv run scripts/run_paper_account.py --show --transactions
+uv run scripts/run_paper_trader.py --top 5
 ```
 
 Observed live eval state:
@@ -200,6 +213,9 @@ Observed live eval state:
   tracked workflow market is not yet due under a 24-hour refresh policy.
 - `--compute-bss` currently reports no resolved records.
 - BSS becomes meaningful only after outcomes are marked or auto-resolved.
+- Paper-trading PnL is now evaluated through the durable ledger plus live
+  re-marking/re-checking. Decision logs live under ignored `data/` and should
+  not be committed.
 
 ## Milestone Plan
 
@@ -490,11 +506,14 @@ uv run pytest -q
 
 Goal: evaluate trading-oriented metrics after predictive evaluation is stable.
 
-Deferred until:
+Current state:
 
-- stateful DB is stable.
-- evidence and forecast provenance is persisted.
-- enough resolved samples exist to estimate signal quality.
+- Account, order, fill, and position ledger tables exist in `data/eval.duckdb`.
+- `run_paper_trader.py` performs a live buy-only paper pass from $1000 capital,
+  logs all decisions to JSONL, and persists workflow/eval provenance.
+- Re-checking and mark-to-market reporting still need to be added so a later run
+  can price open positions, estimate unrealized PnL, and report hit/drawdown
+  metrics before final market resolution.
 
 Acceptance:
 
@@ -509,7 +528,9 @@ uv run pytest -q
 
 ## Immediate Next Step
 
-Continue M2 first.
+Continue M2/M8 together: keep scheduler and workflow provenance work moving,
+and add paper-trading re-check/mark-to-market reporting after the first live
+paper run creates positions.
 
 Detailed next plan:
 
@@ -523,6 +544,9 @@ Detailed next plan:
    repeated forecasts for opinion drift.
 6. Keep the existing `eval_records` compatibility path until the new workflow DB
    is validated over several live runs.
+7. Add a `run_paper_recheck.py` or equivalent command that reloads open
+   `paper_positions`, refreshes YES/NO CLOB quotes, estimates unrealized PnL,
+   and appends mark snapshots to the paper ledger/log.
 
 ## Planning Protocol
 

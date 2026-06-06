@@ -246,6 +246,7 @@ class PaperAccountTransaction(BaseModel):
         "reserve",
         "release",
         "adjust",
+        "trade",
     ]
     cash_delta: float
     reserved_delta: float = 0.0
@@ -257,3 +258,61 @@ class PaperAccountTransaction(BaseModel):
     ref_id: str = ""
     memo: str = ""
     created_at: datetime
+
+
+class PaperOrder(BaseModel):
+    order_id: str
+    account_id: str
+    run_id: str
+    condition_id: str
+    event_id: str = ""
+    category: str = ""
+    question: str = ""
+    token_id: str
+    side: Literal["YES", "NO"]
+    action: Literal["buy"] = "buy"
+    status: Literal["filled", "partial", "rejected"] = "filled"
+    requested_notional: float
+    filled_notional: float = 0.0
+    filled_shares: float = 0.0
+    avg_price: float = 0.0
+    fee: float = 0.0
+    p_m_yes: float
+    p_f_yes: float
+    side_fair_prob: float
+    gross_edge: float
+    net_edge: float
+    confidence: float
+    forecast_run_id: str = ""
+    decision_reason: str = ""
+    created_at: datetime
+
+
+class PaperFill(BaseModel):
+    fill_id: str
+    order_id: str
+    account_id: str
+    condition_id: str
+    token_id: str
+    side: Literal["YES", "NO"]
+    price: float
+    shares: float
+    notional: float
+    fee: float = 0.0
+    filled_at: datetime
+
+
+class PaperPosition(BaseModel):
+    account_id: str
+    condition_id: str
+    token_id: str
+    side: Literal["YES", "NO"]
+    event_id: str = ""
+    category: str = ""
+    question: str = ""
+    shares: float
+    avg_price: float
+    cost_basis: float
+    fees_paid: float = 0.0
+    opened_at: datetime
+    updated_at: datetime

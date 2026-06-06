@@ -7,6 +7,9 @@ from beatodds.evaluation.paper_store import (
     ensure_default_paper_account,
     load_account_transactions,
     load_paper_account,
+    load_paper_orders,
+    load_paper_positions,
+    record_paper_buy,
     release_reserved_cash,
     reserve_cash,
     update_risk_params,
@@ -136,5 +139,83 @@ def test_paper_account_rejects_negative_balances(tmp_path, monkeypatch) -> None:
     assert loaded is not None
     assert loaded.cash_balance == 50.0
     assert loaded.reserved_cash == 50.0
+
+    config_module._settings = None
+
+
+def test_record_paper_buy_creates_order_transaction_and_position(tmp_path, monkeypatch) -> None:
+    _reset_settings(tmp_path, monkeypatch)
+    create_paper_account(
+        account_id="live",
+        name="Live Test",
+        initial_cash=1_000.0,
+        max_order_notional=100.0,
+    )
+
+    order = record_paper_buy(
+        account_id="live",
+        run_id="run-1",
+        condition_id="cond-1",
+        token_id="token-yes",
+        side="YES",
+        requested_notional=40.0,
+        fill_levels=[(0.4, 50.0), (0.42, 47.61904762)],
+        p_m_yes=0.39,
+        p_f_yes=0.47,
+        side_fair_prob=0.47,
+        gross_edge=0.07,
+        net_edge=0.06,
+        confidence=0.5,
+        event_id="event-1",
+        category="Politics",
+        question="Will test happen?",
+        forecast_run_id="forecast-1",
+        fee_rate_bps=100.0,
+    )
+
+    assert order.status == "filled"
+    assert order.filled_notional == 40.0
+    assert order.filled_shares == 97.61904762
+    assert order.fee == 0.4
+
+    account = load_paper_account("live")
+    assert account is not None
+    assert account.cash_balance == 959.6
+
+    transactions = load_account_transactions("live", limit=5)
+    assert transactions[0].transaction_type == "trade"
+    assert transactions[0].cash_delta == -40.4
+    assert transactions[0].ref_id == order.order_id
+
+    orders = load_paper_orders("live")
+    assert len(orders) == 1
+    assert orders[0].order_id == order.order_id
+    assert orders[0].forecast_run_id == "forecast-1"
+
+    positions = load_paper_positions("live")
+    assert len(positions) == 1
+    assert positions[0].shares == 97.61904762
+    assert positions[0].cost_basis == 40.0
+    assert positions[0].fees_paid == 0.4
+
+    record_paper_buy(
+        account_id="live",
+        run_id="run-2",
+        condition_id="cond-1",
+        token_id="token-yes",
+        side="YES",
+        requested_notional=10.0,
+        fill_levels=[(0.5, 20.0)],
+        p_m_yes=0.48,
+        p_f_yes=0.56,
+        side_fair_prob=0.56,
+        gross_edge=0.06,
+        net_edge=0.05,
+        confidence=0.4,
+    )
+    positions = load_paper_positions("live")
+    assert len(positions) == 1
+    assert positions[0].shares == 117.61904762
+    assert positions[0].cost_basis == 50.0
 
     config_module._settings = None
