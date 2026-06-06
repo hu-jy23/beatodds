@@ -7,17 +7,34 @@
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
+    <header class="topbar global-topbar">
+      <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show event list">&gt;</button>
+      <div class="title-block">
+        <p class="eyebrow">Event Detail</p>
+        <h2 id="selectedTitle">Loading markets</h2>
+      </div>
+      <div class="top-actions">
+        <button class="btn" id="updateCurrentBtn">Update topic</button>
+        <button class="btn" id="updateTrackedBtn">Update tracked</button>
+        <button class="btn" id="updateAllBtn">Update all</button>
+        <button class="btn secondary" id="marketsPageBtn">Markets</button>
+        <button class="btn secondary" id="userPageBtn">User</button>
+        <button class="btn secondary" id="themeToggle">Dark</button>
+        <button class="btn secondary" id="refreshBtn">Refresh</button>
+        <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
+      </div>
+    </header>
     <div class="app-shell" id="appShell">
       <aside class="rail left-rail" id="leftRail">
         <div class="rail-head">
           <div>
             <p class="eyebrow">BeatOdds</p>
-            <h1>Markets</h1>
+            <h1>Events</h1>
           </div>
-          <button class="icon-btn" id="hideLeft" title="Hide market list">&lt;</button>
+          <button class="icon-btn" id="hideLeft" title="Hide event list">&lt;</button>
         </div>
         <div class="search-row">
-          <input id="marketSearch" type="search" placeholder="Search markets" />
+          <input id="marketSearch" type="search" placeholder="Search events" />
         </div>
         <div class="segmented" role="tablist">
           <button class="segment active" data-filter="all">All</button>
@@ -28,56 +45,46 @@
       </aside>
 
       <main class="main-col panel-zone" data-zone="middle">
-        <header class="topbar">
-          <div class="topbar-title-row">
-            <button class="icon-btn ghost hidden-toggle" id="showLeft" title="Show market list">&gt;</button>
-            <div class="title-block">
-              <p class="eyebrow">Operator Console</p>
-              <h2 id="selectedTitle">Loading markets</h2>
-            </div>
-          </div>
-          <div class="topbar-action-row">
-            <div class="top-actions">
-              <button class="btn" id="updateCurrentBtn">Update topic</button>
-              <button class="btn" id="updateTrackedBtn">Update tracked</button>
-              <button class="btn" id="updateAllBtn">Update all</button>
-              <button class="btn secondary" id="refreshBtn">Refresh</button>
-              <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
-            </div>
-          </div>
-        </header>
-
         <section class="analysis-panel draggable-panel" data-panel-id="analysis">
-          <div class="analysis-head">
-            <div>
-              <p class="eyebrow">Analysis</p>
-              <h3 id="stance">Awaiting selection</h3>
+          <div class="event-hero">
+            <div class="event-icon" id="eventIcon">BO</div>
+            <div class="event-hero-main">
+              <div class="tag-row" id="eventTags"></div>
+              <div class="analysis-head">
+                <div>
+                  <p class="eyebrow">Event Overview</p>
+                  <h3 id="stance">Awaiting selection</h3>
+                </div>
+                <div class="pill" id="edgePill">edge 0.0%</div>
+              </div>
+              <div class="event-meta-row" id="eventMeta"></div>
             </div>
-            <div class="pill" id="edgePill">edge 0.0%</div>
-          </div>
-          <p class="advice" id="advice">Select a market to inspect live pricing and advice.</p>
-          <div class="action-row">
-            <button class="btn primary" id="trackBtn">Track</button>
-            <button class="btn" id="dealBtn">Paper deal</button>
-            <button class="btn" id="followBtn">Follow up</button>
-            <button class="btn" id="reviewBtn">Reviewed</button>
           </div>
         </section>
 
-        <section class="detail-block topic-detail-block draggable-panel" data-panel-id="live-price">
+        <section class="detail-block topic-detail-block draggable-panel" data-panel-id="event-markets">
           <div class="panel-head tight">
-            <h3>Live Price</h3>
-            <span id="snapshotTime">--</span>
+            <h3>Markets in Event</h3>
+            <span id="eventMarketCount">--</span>
           </div>
-          <canvas id="priceChart" width="720" height="260"></canvas>
-          <div class="quote-grid" id="quoteGrid"></div>
-          <div class="data-status" id="snapshotStatus"></div>
+          <div class="event-market-list" id="eventMarketList"></div>
+        </section>
+
+        <section class="detail-block event-text-block draggable-panel" data-panel-id="event-info">
+          <div class="panel-head tight">
+            <div class="tab-row" role="tablist" aria-label="Event information">
+              <button class="tab-btn active" id="eventRulesTab" data-info-tab="rules" role="tab">规则</button>
+              <button class="tab-btn" id="eventBackgroundTab" data-info-tab="background" role="tab">盘口背景</button>
+            </div>
+            <span id="eventInfoStatus">resolution criteria</span>
+          </div>
+          <p id="eventInfoContent">--</p>
         </section>
 
         <section class="topic-panel draggable-panel" data-panel-id="topic-brief">
           <div class="panel-head tight">
-            <h3>Current Topic Brief</h3>
-            <span id="topicStatus">selected market only</span>
+            <h3>Event Brief</h3>
+            <span id="topicStatus">selected event</span>
           </div>
           <div class="topic-grid" id="topicBrief"></div>
           <div class="message-list compact" id="topicMessages"></div>
@@ -114,12 +121,40 @@
         <div class="rail-head">
           <div>
             <p class="eyebrow">Market</p>
-            <h1>Console</h1>
+            <h1>Workbench</h1>
           </div>
           <button class="icon-btn" id="hideRight" title="Hide console">&gt;</button>
         </div>
         <section class="metric-strip draggable-panel" id="metricStrip" data-panel-id="metrics"></section>
         <section class="detail-block console-intro draggable-panel" data-panel-id="operator-summary">
+          <div class="panel-head tight">
+            <h3 id="selectedMarketTitle">Selected Market</h3>
+            <span id="selectedMarketMeta">--</span>
+          </div>
+          <div class="action-row">
+            <button class="btn primary" id="trackBtn">Track</button>
+            <button class="btn" id="dealBtn">Paper deal</button>
+            <button class="btn" id="followBtn">Follow up</button>
+            <button class="btn" id="reviewBtn">Reviewed</button>
+          </div>
+        </section>
+        <section class="detail-block console-panel live-price-panel">
+          <div class="panel-head tight">
+            <h3>Live Price</h3>
+            <span id="snapshotTime">--</span>
+          </div>
+          <canvas id="priceChart" width="420" height="180"></canvas>
+          <div class="quote-grid" id="quoteGrid"></div>
+          <div class="order-book" id="orderBook"></div>
+          <div class="data-status" id="snapshotStatus"></div>
+        </section>
+        <section class="detail-block console-panel">
+          <div class="panel-head tight">
+            <h3>Forecast Evidence</h3>
+          </div>
+          <div class="evidence-list" id="evidenceList"></div>
+        </section>
+        <section class="detail-block console-intro">
           <div class="panel-head tight">
             <h3>Operator Summary</h3>
             <span>aggregate state</span>
@@ -212,6 +247,190 @@
         </div>
       </div>
     </div>
+
+    <section class="user-page hidden" id="userPage">
+      <aside class="user-sidebar">
+        <div class="user-card">
+          <div class="user-avatar" id="userAvatar">BO</div>
+          <div>
+            <p class="eyebrow">Paper Account</p>
+            <h2 id="userName">Demo</h2>
+            <span id="userAccountId">--</span>
+          </div>
+        </div>
+        <nav class="user-nav" aria-label="User sections">
+          <button class="user-nav-btn active" data-user-section="overview">Overview</button>
+          <button class="user-nav-btn" data-user-section="profile">基础设置</button>
+          <button class="user-nav-btn" data-user-section="funds">资金管理</button>
+          <button class="user-nav-btn" data-user-section="positions">持仓与交易</button>
+          <button class="user-nav-btn" data-user-section="agent">Agent Pattern</button>
+        </nav>
+        <div class="account-switcher">
+          <div class="panel-head tight">
+            <h3>Switch User</h3>
+            <span>local accounts</span>
+          </div>
+          <div class="account-list" id="accountList"></div>
+          <div class="create-user">
+            <input id="newAccountName" type="text" placeholder="Create user by name" />
+            <button class="btn primary" id="createAccountBtn">Create</button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="user-content">
+        <section class="user-section" id="userOverviewSection">
+          <div class="user-hero">
+            <div>
+              <p class="eyebrow">Account Analytics</p>
+              <h2>Paper Trading Dashboard</h2>
+            </div>
+            <div class="pill" id="userModePill">all-in · 0 bps</div>
+          </div>
+          <div class="user-stat-grid" id="userStatGrid"></div>
+          <div class="user-grid two">
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>NAV Curve</h3>
+                <span>cash + reserved</span>
+              </div>
+              <canvas id="userNavChart" width="720" height="240"></canvas>
+            </section>
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>Recent Ledger</h3>
+                <span id="ledgerStatus">--</span>
+              </div>
+              <div class="transaction-list" id="transactionList"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="user-section hidden" id="userProfileSection">
+          <div class="detail-block user-block">
+            <div class="panel-head tight">
+              <h3>基础设置</h3>
+              <span>name / icon / notes</span>
+            </div>
+            <div class="form-grid">
+              <label>
+                <span>Name</span>
+                <input id="profileName" type="text" placeholder="User name" />
+              </label>
+              <label>
+                <span>Icon URL</span>
+                <input id="profileIconUrl" type="url" placeholder="https://..." />
+              </label>
+              <label class="wide">
+                <span>Notes</span>
+                <textarea id="profileNotes" rows="5" placeholder="Research notes for this paper account"></textarea>
+              </label>
+            </div>
+            <button class="btn primary" id="saveProfileBtn">Save profile</button>
+          </div>
+        </section>
+
+        <section class="user-section hidden" id="userFundsSection">
+          <div class="user-grid two">
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>资金管理</h3>
+                <span>local paper ledger</span>
+              </div>
+              <div class="form-grid compact">
+                <label>
+                  <span>Amount</span>
+                  <input id="fundAmount" type="number" min="0" step="1" placeholder="1000" />
+                </label>
+                <label>
+                  <span>Memo</span>
+                  <input id="fundMemo" type="text" placeholder="manual funding adjustment" />
+                </label>
+              </div>
+              <div class="action-row">
+                <button class="btn primary" id="depositBtn">Deposit</button>
+                <button class="btn danger" id="withdrawBtn">Withdraw</button>
+              </div>
+            </section>
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>Cash Breakdown</h3>
+                <span id="cashStatus">--</span>
+              </div>
+              <div class="mini-stats" id="cashBreakdown"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="user-section hidden" id="userPositionsSection">
+          <div class="user-grid two">
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>当前持仓</h3>
+                <span id="positionStatus">simulated exposure</span>
+              </div>
+              <div class="position-list" id="positionList"></div>
+            </section>
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>历史 Trade 记录</h3>
+                <span id="tradeStatus">paper deals</span>
+              </div>
+              <div class="trade-list" id="tradeList"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="user-section hidden" id="userAgentSection">
+          <div class="detail-block user-block">
+            <div class="panel-head tight">
+              <h3>Agent Trading Pattern</h3>
+              <span id="configAccountLabel">--</span>
+            </div>
+            <label>
+              <span>Sizing mode</span>
+              <select id="sizingMode">
+                <option value="all_in">All-in per trade</option>
+                <option value="fixed">Fixed notional</option>
+                <option value="fraction">Fraction of cash</option>
+              </select>
+            </label>
+            <div class="config-grid">
+              <label>
+                <span>Order fraction</span>
+                <input id="orderFraction" type="number" min="0.01" max="1" step="0.01" />
+              </label>
+              <label>
+                <span>Max order $</span>
+                <input id="maxOrderNotional" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>Min cash buffer $</span>
+                <input id="minCashBuffer" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>Fee bps</span>
+                <input id="feeRateBps" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>Slippage bps</span>
+                <input id="slippageBps" type="number" min="0" step="1" />
+              </label>
+              <label>
+                <span>Total exposure $</span>
+                <input id="maxTotalExposure" type="number" min="0" step="1" />
+              </label>
+            </div>
+            <label class="check-row">
+              <input id="autoTradeEnabled" type="checkbox" />
+              <span>Allow autonomous paper orders</span>
+            </label>
+            <button class="btn primary" id="saveConfigBtn">Save config</button>
+          </div>
+        </section>
+      </main>
+    </section>
+
     <script src="/assets/app.js"></script>
   </body>
 </html>

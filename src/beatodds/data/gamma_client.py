@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from beatodds.common.config import get_settings
-from beatodds.common.types import MarketMeta
+from beatodds.common.types import EventMeta, MarketMeta
 
 
 def _parse_json_list(value: Any) -> list[str]:
@@ -25,6 +25,17 @@ def _parse_json_list(value: Any) -> list[str]:
         if isinstance(parsed, list):
             return [str(item) for item in parsed]
     return []
+
+
+def _parse_float_list(value: Any) -> list[float]:
+    raw_values = _parse_json_list(value)
+    parsed: list[float] = []
+    for item in raw_values:
+        try:
+            parsed.append(float(item))
+        except (TypeError, ValueError):
+            continue
+    return parsed
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -45,6 +56,17 @@ def _float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _tag_labels(raw_event: dict[str, Any]) -> list[str]:
+    tags = raw_event.get("tags") or []
+    if not isinstance(tags, list):
+        return []
+    labels: list[str] = []
+    for tag in tags:
+        if isinstance(tag, dict) and tag.get("label"):
+            labels.append(str(tag["label"]))
+    return labels
 
 
 class GammaClient:
@@ -87,27 +109,69 @@ class GammaClient:
 
     def get_event_markets(self, event_id: str) -> list[MarketMeta]:
         """Fetch all markets in one Gamma event, used for complete neg-risk groups."""
-        if not event_id:
+        data = self.get_event(event_id)
+        if not data:
             return []
-        resp = self._client.get(f"/events/{event_id}")
-        resp.raise_for_status()
-        data = resp.json()
         markets = data.get("markets", []) if isinstance(data, dict) else []
         parsed: list[MarketMeta] = []
         for raw in markets:
             try:
-                parsed.append(self.parse_market(raw))
+                parsed.append(self.parse_market(raw, parent_event=data))
             except Exception:
                 continue
         return parsed
 
-    def parse_market(self, raw: dict[str, Any]) -> MarketMeta:
+    def get_event(self, event_id: str) -> dict[str, Any] | None:
+        if not event_id:
+            return None
+        resp = self._client.get(f"/events/{event_id}")
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+
+    def parse_event(self, raw: dict[str, Any]) -> EventMeta:
+        tags = _tag_labels(raw)
+        return EventMeta(
+            event_id=str(raw.get("id") or raw.get("eventId") or raw.get("event_id") or ""),
+            title=str(raw.get("title") or raw.get("question") or ""),
+            slug=str(raw.get("slug") or ""),
+            ticker=str(raw.get("ticker") or ""),
+            description=str(raw.get("description") or ""),
+            image=str(raw.get("image") or ""),
+            icon=str(raw.get("icon") or raw.get("image") or ""),
+            category=str(raw.get("category") or (tags[0] if tags else "")),
+            tags=tags,
+            start_time=_parse_dt(raw.get("startDate") or raw.get("creationDate")),
+            end_time=_parse_dt(raw.get("endDate") or raw.get("endDateIso")),
+            volume_24h=_float(raw.get("volume24hr") or raw.get("volume24hrClob")),
+            liquidity=_float(raw.get("liquidity") or raw.get("liquidityClob")),
+            active=bool(raw.get("active", True)),
+            closed=bool(raw.get("closed", False)),
+            archived=bool(raw.get("archived", False)),
+            neg_risk=bool(raw.get("negRisk") or raw.get("enableNegRisk")),
+            market_count=len(raw.get("markets") or []),
+        )
+
+    def parse_market(
+        self,
+        raw: dict[str, Any],
+        parent_event: dict[str, Any] | None = None,
+    ) -> MarketMeta:
         outcomes = _parse_json_list(raw.get("outcomes"))
+        outcome_prices = _parse_float_list(raw.get("outcomePrices"))
         token_ids = _parse_json_list(raw.get("clobTokenIds"))
         events = raw.get("events") or []
+        event_raw = parent_event or {}
+        if not event_raw and isinstance(events, list) and events:
+            maybe_event = events[0]
+            if isinstance(maybe_event, dict):
+                event_raw = maybe_event
         event_id = ""
-        if isinstance(events, list) and events:
-            event_id = str(events[0].get("id", ""))
+        event_category = ""
+        if event_raw:
+            event = self.parse_event(event_raw)
+            event_id = event.event_id
+            event_category = event.category
 
         neg_risk = bool(raw.get("negRisk") or raw.get("neg_risk"))
         neg_risk_market_id = (
@@ -123,13 +187,14 @@ class GammaClient:
             question=str(raw.get("question") or raw.get("title") or ""),
             description=description,
             resolution_text=description or str(raw.get("resolutionSource") or ""),
-            category=str(raw.get("category") or raw.get("groupItemTitle") or ""),
+            category=str(raw.get("category") or event_category or raw.get("groupItemTitle") or ""),
             neg_risk=neg_risk,
             neg_risk_market_id=str(neg_risk_market_id) if neg_risk_market_id else None,
             token_yes_id=token_ids[0] if token_ids else "",
             token_no_id=token_ids[1] if len(token_ids) > 1 else "",
             outcome_count=len(outcomes) if outcomes else len(token_ids),
             outcomes=outcomes,
+            outcome_prices=outcome_prices,
             close_time=_parse_dt(raw.get("endDate") or raw.get("endDateIso")),
             created_time=_parse_dt(raw.get("createdAt") or raw.get("startDate")),
             volume_24h=_float(raw.get("volume24hr") or raw.get("volume24hrClob")),

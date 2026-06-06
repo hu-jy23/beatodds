@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BeatOdds Paper Trading Workflow</title>
+    <style>
+      :root {
+        --bg: #08100d;
+        --panel: #111a15;
+        --panel-2: #17231d;
+        --ink: #f4f8f3;
+        --muted: #9caf9f;
+        --line: #2b3c32;
+        --green: #34d08a;
+        --blue: #73a1ff;
+        --amber: #f4bd55;
+        --red: #ff7668;
+        --paper: #f7f3e9;
+        --paper-ink: #17231d;
+        --shadow: 0 28px 90px rgba(0, 0, 0, 0.35);
+        font-family:
+          "Aptos Display",
+          "PingFang SC",
+          "Noto Sans CJK SC",
+          "Microsoft YaHei",
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 18% 10%, rgba(52, 208, 138, 0.20), transparent 24%),
+          radial-gradient(circle at 80% 20%, rgba(115, 161, 255, 0.18), transparent 28%),
+          linear-gradient(135deg, #07100d, #0d1512 46%, #050807);
+        overflow: hidden;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .deck {
+        height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 28px;
+      }
+
+      .slide {
+        width: min(1280px, calc(100vw - 56px));
+        aspect-ratio: 16 / 9;
+        display: none;
+        position: relative;
+        overflow: hidden;
+        padding: 54px;
+        background:
+          linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015)),
+          var(--panel);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 30px;
+        box-shadow: var(--shadow);
+      }
+
+      .slide.active {
+        display: block;
+      }
+
+      .slide::after {
+        content: "";
+        position: absolute;
+        inset: auto -12% -35% auto;
+        width: 48%;
+        height: 70%;
+        background: radial-gradient(circle, rgba(52, 208, 138, 0.12), transparent 65%);
+        pointer-events: none;
+      }
+
+      .kicker {
+        margin: 0 0 12px;
+        color: var(--green);
+        font-size: 14px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        max-width: 920px;
+        font-size: clamp(48px, 6.2vw, 86px);
+        line-height: 0.98;
+        letter-spacing: -0.045em;
+      }
+
+      h2 {
+        max-width: 920px;
+        font-size: clamp(36px, 4vw, 58px);
+        line-height: 1.02;
+        letter-spacing: -0.035em;
+      }
+
+      h3 {
+        font-size: 19px;
+        letter-spacing: -0.01em;
+      }
+
+      .lead {
+        max-width: 780px;
+        margin-top: 24px;
+        color: var(--muted);
+        font-size: 22px;
+        line-height: 1.46;
+      }
+
+      .stamp {
+        position: absolute;
+        right: 46px;
+        top: 42px;
+        display: grid;
+        gap: 4px;
+        padding: 13px 15px;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        font-size: 12px;
+        text-align: right;
+      }
+
+      .stamp strong {
+        color: var(--ink);
+        font-size: 15px;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 20px;
+        margin-top: 34px;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+        margin-top: 30px;
+      }
+
+      .card {
+        position: relative;
+        padding: 20px;
+        background: rgba(255, 255, 255, 0.045);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+      }
+
+      .card p {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1.48;
+      }
+
+      .card strong {
+        color: var(--ink);
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        height: 28px;
+        padding: 0 10px;
+        margin-bottom: 12px;
+        color: #06100b;
+        background: var(--green);
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 850;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 34px;
+      }
+
+      .step {
+        min-height: 168px;
+        padding: 18px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+      }
+
+      .step .num {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 14px;
+        color: #06100b;
+        background: var(--green);
+        border-radius: 50%;
+        font-weight: 900;
+      }
+
+      .step p {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.42;
+      }
+
+      .ledger-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 22px;
+        padding: 12px;
+        background: rgba(52, 208, 138, 0.08);
+        border: 1px solid rgba(52, 208, 138, 0.22);
+        border-radius: 18px;
+      }
+
+      .ledger-strip span {
+        padding: 10px 12px;
+        color: var(--green);
+        background: rgba(0, 0, 0, 0.16);
+        border-radius: 12px;
+        font-size: 13px;
+        font-weight: 750;
+        text-align: center;
+      }
+
+      .swimlane {
+        display: grid;
+        grid-template-columns: 180px minmax(0, 1fr);
+        gap: 12px;
+        margin-top: 28px;
+      }
+
+      .lane-label {
+        display: grid;
+        place-items: center;
+        min-height: 76px;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.035);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        font-weight: 800;
+      }
+
+      .lane {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .lane-cell {
+        min-height: 76px;
+        display: grid;
+        align-content: center;
+        gap: 5px;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.045);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        font-size: 13px;
+      }
+
+      .lane-cell strong {
+        color: var(--ink);
+      }
+
+      .lane-cell span {
+        color: var(--muted);
+      }
+
+      .decision {
+        display: grid;
+        grid-template-columns: 1fr 220px 1fr;
+        gap: 22px;
+        align-items: center;
+        margin-top: 40px;
+      }
+
+      .diamond {
+        width: 210px;
+        height: 210px;
+        display: grid;
+        place-items: center;
+        justify-self: center;
+        background: linear-gradient(135deg, rgba(52, 208, 138, 0.30), rgba(115, 161, 255, 0.14));
+        border: 1px solid rgba(52, 208, 138, 0.42);
+        transform: rotate(45deg);
+        border-radius: 28px;
+      }
+
+      .diamond span {
+        display: block;
+        max-width: 120px;
+        color: var(--ink);
+        font-size: 23px;
+        font-weight: 900;
+        line-height: 1.1;
+        text-align: center;
+        transform: rotate(-45deg);
+      }
+
+      .list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .list-item {
+        padding: 15px 16px;
+        background: rgba(255, 255, 255, 0.045);
+        border: 1px solid var(--line);
+        border-radius: 15px;
+      }
+
+      .list-item strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .list-item span {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .book {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+        margin-top: 32px;
+      }
+
+      .book-side {
+        padding: 18px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+      }
+
+      .book-side table {
+        width: 100%;
+        margin-top: 12px;
+        border-collapse: collapse;
+        font-size: 15px;
+      }
+
+      .book-side th,
+      .book-side td {
+        padding: 10px 8px;
+        border-bottom: 1px solid var(--line);
+        text-align: right;
+      }
+
+      .book-side th:first-child,
+      .book-side td:first-child {
+        text-align: left;
+      }
+
+      .ask {
+        color: var(--red);
+      }
+
+      .bid {
+        color: var(--green);
+      }
+
+      .timeline {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 34px;
+      }
+
+      .phase {
+        min-height: 190px;
+        padding: 18px;
+        background: rgba(255, 255, 255, 0.045);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+      }
+
+      .phase strong {
+        color: var(--amber);
+      }
+
+      .phase p {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.48;
+      }
+
+      .schema {
+        display: grid;
+        grid-template-columns: 0.9fr 1.1fr;
+        gap: 22px;
+        margin-top: 30px;
+      }
+
+      .table-card {
+        padding: 20px;
+        background: var(--paper);
+        border-radius: 22px;
+        color: var(--paper-ink);
+      }
+
+      .table-card h3 {
+        margin-bottom: 14px;
+        font-size: 22px;
+      }
+
+      .field {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 9px 0;
+        border-bottom: 1px solid rgba(23, 35, 29, 0.16);
+        color: rgba(23, 35, 29, 0.74);
+        font-size: 14px;
+      }
+
+      .field strong {
+        color: var(--paper-ink);
+      }
+
+      .phase-plan {
+        display: grid;
+        gap: 12px;
+      }
+
+      .phase-plan .card {
+        padding: 17px;
+      }
+
+      .footer {
+        position: absolute;
+        left: 54px;
+        right: 54px;
+        bottom: 26px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .controls {
+        position: fixed;
+        left: 50%;
+        bottom: 18px;
+        z-index: 20;
+        display: flex;
+        gap: 10px;
+        transform: translateX(-50%);
+      }
+
+      .controls button {
+        min-width: 86px;
+        height: 38px;
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        cursor: pointer;
+      }
+
+      .controls button:hover {
+        border-color: var(--green);
+      }
+
+      .progress {
+        position: fixed;
+        left: 0;
+        bottom: 0;
+        height: 4px;
+        width: 100%;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .bar {
+        height: 100%;
+        width: 0;
+        background: linear-gradient(90deg, var(--green), var(--blue));
+        transition: width 180ms ease;
+      }
+
+      @media (max-width: 900px) {
+        body {
+          overflow: auto;
+        }
+
+        .deck {
+          height: auto;
+          padding: 14px;
+        }
+
+        .slide {
+          width: 100%;
+          min-height: 100vh;
+          aspect-ratio: auto;
+          padding: 28px;
+          border-radius: 18px;
+        }
+
+        .grid-2,
+        .grid-3,
+        .flow,
+        .lane,
+        .decision,
+        .book,
+        .timeline,
+        .schema {
+          grid-template-columns: 1fr;
+        }
+
+        .swimlane {
+          grid-template-columns: 1fr;
+        }
+
+        .stamp,
+        .footer,
+        .controls,
+        .progress {
+          display: none;
+        }
+      }
+
+      @media print {
+        body {
+          overflow: visible;
+          background: #fff;
+        }
+
+        .deck {
+          display: block;
+          height: auto;
+          padding: 0;
+        }
+
+        .slide {
+          display: block;
+          width: 100vw;
+          height: 100vh;
+          page-break-after: always;
+          box-shadow: none;
+          border-radius: 0;
+        }
+
+        .controls,
+        .progress {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="deck">
+      <section class="slide active">
+        <p class="kicker">BeatOdds Paper Trading System</p>
+        <h1>长期事件，需要长期交易账本</h1>
+        <p class="lead">
+          Paper trading 的核心是把 agent 的每一次交易意图、证据边界、盘口状态、撮合结果、持仓变化和最终结算放进同一个可追溯生命周期。
+        </p>
+        <div class="grid-3">
+          <div class="card">
+            <span class="tag">第一阶段</span>
+            <h3>先做 paper_accounts</h3>
+            <p>账户、资金、风险预算、最大仓位、单 event 暴露限制，作为后续 order 和 position 的上层约束。</p>
+          </div>
+          <div class="card">
+            <span class="tag">关键原则</span>
+            <h3>每笔交易绑定证据和盘口</h3>
+            <p>order 必须指向 <strong>forecast_run_id</strong> 和 <strong>market_snapshot_id</strong>，方便未来解释交易决策。</p>
+          </div>
+          <div class="card">
+            <span class="tag">后续讨论</span>
+            <h3>运行流程先画清楚</h3>
+            <p>先把 scan、forecast、policy、execution、monitor、settlement 的接口关系讲清楚。</p>
+          </div>
+        </div>
+        <div class="stamp"><strong>HTML PPT</strong><span>左右键翻页</span></div>
+        <div class="footer"><span>Paper Trading Workflow</span><span>1 / 7</span></div>
+      </section>
+
+      <section class="slide">
+        <p class="kicker">Workflow Overview</p>
+        <h2>运行流程主线</h2>
+        <p class="lead">一个 market 从被发现到被结算，中间会经历多次 forecast、mark、adjust 和 exit 判断。</p>
+        <div class="flow">
+          <div class="step">
+            <div class="num">1</div>
+            <h3>Market Scanner</h3>
+            <p>发现 event / market，保存 latest market metadata 和盘口快照。</p>
+          </div>
+          <div class="step">
+            <div class="num">2</div>
+            <h3>Evidence Freeze</h3>
+            <p>记录 evidence_frozen_at，检索只允许使用预测前可用证据。</p>
+          </div>
+          <div class="step">
+            <div class="num">3</div>
+            <h3>Forecast Run</h3>
+            <p>输出 p_m、p_f、edge、confidence、reasoning。</p>
+          </div>
+          <div class="step">
+            <div class="num">4</div>
+            <h3>Trader Policy</h3>
+            <p>根据 edge、spread、liquidity、risk budget 决定 trade / skip / watch。</p>
+          </div>
+          <div class="step">
+            <div class="num">5</div>
+            <h3>Execution Sim</h3>
+            <p>用完整 CLOB depth 模拟成交，写 order 和 fill。</p>
+          </div>
+          <div class="step">
+            <div class="num">6</div>
+            <h3>Position Loop</h3>
+            <p>周期性 mark-to-market，必要时加仓、减仓、退出或等待结算。</p>
+          </div>
+        </div>
+        <div class="ledger-strip">
+          <span>paper_orders</span>
+          <span>paper_fills</span>
+          <span>paper_positions</span>
+          <span>paper_marks</span>
+        </div>
+        <div class="footer"><span>主线流程</span><span>2 / 7</span></div>
+      </section>
+
+      <section class="slide">
+        <p class="kicker">System Swimlane</p>
+        <h2>Agent、Market、Ledger 三条线同时推进</h2>
+        <div class="swimlane">
+          <div class="lane-label">Agent</div>
+          <div class="lane">
+            <div class="lane-cell"><strong>Scan</strong><span>选样本</span></div>
+            <div class="lane-cell"><strong>Parse</strong><span>理解规则</span></div>
+            <div class="lane-cell"><strong>Forecast</strong><span>形成 p_f</span></div>
+            <div class="lane-cell"><strong>Policy</strong><span>交易判断</span></div>
+            <div class="lane-cell"><strong>Review</strong><span>观点变化</span></div>
+          </div>
+          <div class="lane-label">Market</div>
+          <div class="lane">
+            <div class="lane-cell"><strong>Metadata</strong><span>event / market</span></div>
+            <div class="lane-cell"><strong>Order Book</strong><span>bid / ask depth</span></div>
+            <div class="lane-cell"><strong>Price Move</strong><span>mark price</span></div>
+            <div class="lane-cell"><strong>Liquidity</strong><span>capacity</span></div>
+            <div class="lane-cell"><strong>Resolution</strong><span>outcome</span></div>
+          </div>
+          <div class="lane-label">Ledger</div>
+          <div class="lane">
+            <div class="lane-cell"><strong>Account</strong><span>risk budget</span></div>
+            <div class="lane-cell"><strong>Order</strong><span>intent</span></div>
+            <div class="lane-cell"><strong>Fill</strong><span>sim execution</span></div>
+            <div class="lane-cell"><strong>Position</strong><span>exposure</span></div>
+            <div class="lane-cell"><strong>Settlement</strong><span>PnL</span></div>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3>关键绑定</h3>
+            <p>order 绑定 forecast_run_id、snapshot_id、evidence_frozen_at。fill 绑定 order_book levels。</p>
+          </div>
+          <div class="card">
+            <h3>关键输出</h3>
+            <p>未来评估同时覆盖 forecast 准确性、交易 policy 质量和 edge 到收益的转化效率。</p>
+          </div>
+        </div>
+        <div class="footer"><span>三条泳道</span><span>3 / 7</span></div>
+      </section>
+
+      <section class="slide">
+        <p class="kicker">Decision Point</p>
+        <h2>Trader policy 是 trade / skip / watch 的闸门</h2>
+        <div class="decision">
+          <div class="list">
+            <div class="list-item"><strong>输入</strong><span>p_m、p_f、edge、confidence</span></div>
+            <div class="list-item"><strong>盘口</strong><span>spread、depth、best bid / ask</span></div>
+            <div class="list-item"><strong>风险</strong><span>account budget、event exposure、category cap</span></div>
+          </div>
+          <div class="diamond"><span>是否下单</span></div>
+          <div class="list">
+            <div class="list-item"><strong>Trade</strong><span>生成 paper_order，进入撮合模拟</span></div>
+            <div class="list-item"><strong>Skip</strong><span>记录 skipped decision，避免样本选择偏差</span></div>
+            <div class="list-item"><strong>Watch</strong><span>进入 due refresh 队列，等待价格或证据变化</span></div>
+          </div>
+        </div>
+        <div class="footer"><span>交易策略闸门</span><span>4 / 7</span></div>
+      </section>
+
+      <section class="slide">
+        <p class="kicker">Execution Simulation</p>
+        <h2>成交模拟要吃盘口深度</h2>
+        <p class="lead">limit order 不能只看 best ask。paper fill 应该逐层吃单，记录 partial fill、平均成交价、剩余未成交数量。</p>
+        <div class="book">
+          <div class="book-side">
+            <h3 class="ask">买 YES 时吃 Asks</h3>
+            <table>
+              <thead>
+                <tr><th>Price</th><th>Shares</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                <tr><td class="ask">0.420</td><td>25</td><td>fill</td></tr>
+                <tr><td class="ask">0.425</td><td>40</td><td>fill</td></tr>
+                <tr><td class="ask">0.430</td><td>100</td><td>partial</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="book-side">
+            <h3 class="bid">卖 YES 时打 Bids</h3>
+            <table>
+              <thead>
+                <tr><th>Price</th><th>Shares</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                <tr><td class="bid">0.418</td><td>30</td><td>fill</td></tr>
+                <tr><td class="bid">0.414</td><td>80</td><td>fill</td></tr>
+                <tr><td class="bid">0.410</td><td>200</td><td>partial</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="grid-3">
+          <div class="card"><h3>输出 1</h3><p>paper_fills：price、size、fee、slippage、level index。</p></div>
+          <div class="card"><h3>输出 2</h3><p>order_status：filled、partial、rejected、expired。</p></div>
+          <div class="card"><h3>输出 3</h3><p>capacity：当前 edge 能容纳多大 paper size。</p></div>
+        </div>
+        <div class="footer"><span>撮合模拟</span><span>5 / 7</span></div>
+      </section>
+
+      <section class="slide">
+        <p class="kicker">Position Lifecycle</p>
+        <h2>持仓是长周期对象</h2>
+        <div class="timeline">
+          <div class="phase">
+            <strong>Open</strong>
+            <p>从 fill 聚合成 position，记录成本、side、size、opening thesis。</p>
+          </div>
+          <div class="phase">
+            <strong>Mark</strong>
+            <p>定期刷新 order book，写 paper_marks，更新未实现 PnL。</p>
+          </div>
+          <div class="phase">
+            <strong>Adjust</strong>
+            <p>新证据或价格变化触发重新 forecast，再判断加仓、减仓或 hold。</p>
+          </div>
+          <div class="phase">
+            <strong>Exit</strong>
+            <p>按止盈、止损、edge 消失、接近截止日、流动性退化退出。</p>
+          </div>
+          <div class="phase">
+            <strong>Settle</strong>
+            <p>resolution 后写 settlement，计算最终 realized PnL。</p>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3>长事件的重点</h3>
+            <p>持仓期间的每次观点变化都要进入 ledger。这样才能区分 forecast 错误、policy 错误和 execution 错误。</p>
+          </div>
+          <div class="card">
+            <h3>GUI 展示</h3>
+            <p>右侧 workbench 展示当前 position、latest mark、entry thesis、next due refresh。</p>
+          </div>
+        </div>
+        <div class="footer"><span>持仓生命周期</span><span>6 / 7</span></div>
+      </section>
+
+      <section class="slide">
+        <p class="kicker">Implementation Slice</p>
+        <h2>第一版先落 paper_accounts 和账本骨架</h2>
+        <div class="schema">
+          <div class="table-card">
+            <h3>paper_accounts</h3>
+            <div class="field"><strong>account_id</strong><span>primary key</span></div>
+            <div class="field"><strong>name</strong><span>human label</span></div>
+            <div class="field"><strong>cash_balance</strong><span>available cash</span></div>
+            <div class="field"><strong>max_order_size</strong><span>single order cap</span></div>
+            <div class="field"><strong>max_event_exposure</strong><span>event cap</span></div>
+            <div class="field"><strong>created_at</strong><span>audit time</span></div>
+          </div>
+          <div class="phase-plan">
+            <div class="card">
+              <span class="tag">Step 1</span>
+              <h3>账户和风险参数</h3>
+              <p>先实现 create/load/update account，默认 demo account，所有 paper order 必须归属 account。</p>
+            </div>
+            <div class="card">
+              <span class="tag">Step 2</span>
+              <h3>交易意图和成交账本</h3>
+              <p>接 paper_orders、paper_fills。即使暂时没有自动 trader policy，也能支持 GUI 人工 paper deal。</p>
+            </div>
+            <div class="card">
+              <span class="tag">Step 3</span>
+              <h3>持仓和 mark</h3>
+              <p>从 fills 聚合 position，用 live CLOB 价格写 mark，给后续 PnL dashboard 提供数据。</p>
+            </div>
+          </div>
+        </div>
+        <div class="footer"><span>下一步实现切片</span><span>7 / 7</span></div>
+      </section>
+    </main>
+
+    <div class="controls" aria-label="slide controls">
+      <button id="prevBtn" type="button">Prev</button>
+      <button id="nextBtn" type="button">Next</button>
+    </div>
+    <div class="progress"><div class="bar" id="bar"></div></div>
+
+    <script>
+      const slides = [...document.querySelectorAll(".slide")];
+      const bar = document.getElementById("bar");
+      let index = 0;
+
+      function showSlide(nextIndex) {
+        index = Math.max(0, Math.min(slides.length - 1, nextIndex));
+        slides.forEach((slide, idx) => {
+          slide.classList.toggle("active", idx === index);
+        });
+        bar.style.width = `${((index + 1) / slides.length) * 100}%`;
+      }
+
+      document.getElementById("prevBtn").addEventListener("click", () => showSlide(index - 1));
+      document.getElementById("nextBtn").addEventListener("click", () => showSlide(index + 1));
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowRight" || event.key === " ") showSlide(index + 1);
+        if (event.key === "ArrowLeft") showSlide(index - 1);
+        if (event.key === "Home") showSlide(0);
+        if (event.key === "End") showSlide(slides.length - 1);
+      });
+      showSlide(0);
+    </script>
+  </body>
+</html>

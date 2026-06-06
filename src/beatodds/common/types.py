@@ -8,8 +8,29 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
-# Market
+# Market / Event
 # ---------------------------------------------------------------------------
+
+class EventMeta(BaseModel):
+    event_id: str
+    title: str
+    slug: str = ""
+    ticker: str = ""
+    description: str = ""
+    image: str = ""
+    icon: str = ""
+    category: str = ""
+    tags: list[str] = Field(default_factory=list)
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    volume_24h: float = 0.0
+    liquidity: float = 0.0
+    active: bool = True
+    closed: bool = False
+    archived: bool = False
+    neg_risk: bool = False
+    market_count: int = 0
+
 
 class MarketMeta(BaseModel):
     condition_id: str
@@ -23,6 +44,7 @@ class MarketMeta(BaseModel):
     token_no_id: str = ""
     outcome_count: int = 2
     outcomes: list[str] = Field(default_factory=list)
+    outcome_prices: list[float] = Field(default_factory=list)
     close_time: datetime | None = None
     created_time: datetime | None = None
     volume_24h: float = 0.0
@@ -182,3 +204,56 @@ class EvalRecord(BaseModel):
     resolved_outcome: float | None = None   # 1.0=YES, 0.0=NO; None=unresolved
     signal_type: str = ""
     model_version: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Paper Trading
+# ---------------------------------------------------------------------------
+
+class PaperAccount(BaseModel):
+    account_id: str
+    name: str
+    icon_url: str = ""
+    base_currency: str = "USD"
+    initial_cash: float
+    cash_balance: float
+    reserved_cash: float = 0.0
+    status: Literal["active", "paused", "closed"] = "active"
+    risk_profile: str = "demo"
+    sizing_mode: Literal["all_in", "fixed", "fraction"] = "all_in"
+    order_fraction: float = 1.0
+    auto_trade_enabled: bool = False
+    max_order_notional: float = 100.0
+    max_market_exposure: float = 250.0
+    max_event_exposure: float = 500.0
+    max_category_exposure: float = 1000.0
+    max_total_exposure: float = 5000.0
+    min_cash_buffer: float = 0.0
+    fee_rate_bps: float = 0.0
+    slippage_bps: float = 0.0
+    created_at: datetime
+    updated_at: datetime
+    notes: str = ""
+
+
+class PaperAccountTransaction(BaseModel):
+    transaction_id: str
+    account_id: str
+    transaction_type: Literal[
+        "create",
+        "deposit",
+        "withdraw",
+        "reserve",
+        "release",
+        "adjust",
+    ]
+    cash_delta: float
+    reserved_delta: float = 0.0
+    cash_before: float
+    cash_after: float
+    reserved_before: float = 0.0
+    reserved_after: float = 0.0
+    ref_type: str = ""
+    ref_id: str = ""
+    memo: str = ""
+    created_at: datetime

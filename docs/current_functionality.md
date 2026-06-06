@@ -1,6 +1,6 @@
 # BeatOdds 当前功能说明
 
-状态日期：2026-05-25
+状态日期：2026-06-05
 
 本文档说明当前仓库已经具备哪些能力、哪些文件支撑这些能力，以及本地
 DuckDB 数据库的现况。它用于项目交接和长期开发，不替代面向用户的
@@ -30,8 +30,10 @@ edge = p_f - p_m
 
 能力：
 
-- 从 Polymarket Gamma API 拉取 active/liquid markets。
-- 将 Gamma 原始 payload 解析成强类型 `MarketMeta`。
+- 从 Polymarket Gamma API 拉取 active/liquid markets 及其关联 events。
+- 将 Gamma 原始 payload 解析成强类型 `EventMeta` 和 `MarketMeta`。
+- 保存 event icon/image，以及 market outcomes/outcome prices，用于 GUI 展示
+  YES/NO token 价格。
 - 从 CLOB 获取实时订单簿。
 - 构造包含 bid、ask、midpoint、spread、timestamp 的 `PriceSnapshot`。
 
@@ -39,6 +41,8 @@ edge = p_f - p_m
 
 - `src/beatodds/data/gamma_client.py`
   - `GammaClient.get_liquid_markets()` 按 `volume24hr` 拉取活跃市场。
+  - `GammaClient.get_event()` 拉取单个 event 的完整元数据。
+  - `GammaClient.parse_event()` 将 Gamma event dict 转为 `EventMeta`。
   - `GammaClient.parse_market()` 将 Gamma dict 转为 `MarketMeta`。
   - `GammaClient.get_event_markets()` 拉取完整 event group，用于 neg-risk 检查。
 - `src/beatodds/data/clob_client.py`
@@ -46,7 +50,8 @@ edge = p_f - p_m
   - `ClobReadClient.get_snapshot()` 将订单簿转为 `PriceSnapshot`。
   - 已处理 CLOB v2 的特殊排序：best bid 和 best ask 都取对应侧最后一个元素。
 - `src/beatodds/common/types.py`
-  - 定义 `MarketMeta`、`PriceSnapshot`、`PriceHistoryPoint`、`CandidateMarket`。
+  - 定义 `EventMeta`、`MarketMeta`、`PriceSnapshot`、`PriceHistoryPoint`、
+    `CandidateMarket`。
 
 入口命令：
 
@@ -309,6 +314,59 @@ uv run scripts/run_batch_eval.py --show-due --stale-hours 24 --top 10
 - repeated forecasting 前需要先刷新 tracked market 的当前 order-book snapshot，
   否则新 forecast 会使用旧 `p_m`。
 
+### 11. Paper trading account 基建
+
+能力：
+
+- 在 `data/eval.duckdb` 中维护 paper trading account。
+- 保存账户初始资金、现金余额、reserved cash、账户状态、风险参数和 agent
+  trading pattern。
+- 用 append-only `paper_account_transactions` 记录所有现金变化。
+- 支持创建默认 demo account、创建自定义 account、充值、提现、reserve cash、
+  release reserved cash、更新风险参数和交易 sizing 配置。
+- 默认账户配置是 all-in per trade、0 fee、0 slippage；GUI 可以切换 fixed /
+  fraction sizing。
+- 为后续 `paper_orders`、`paper_fills`、`paper_positions`、`paper_marks` 提供
+  `account_id` 和资金约束基础。
+
+支撑文件：
+
+- `src/beatodds/evaluation/paper_store.py`
+  - `create_paper_account()` 创建账户并写 initial capital transaction。
+  - `ensure_default_paper_account()` 创建或读取默认 `demo` 账户。
+  - `deposit_cash()`、`withdraw_cash()`、`reserve_cash()`、
+    `release_reserved_cash()` 写现金流水并更新账户余额。
+  - `update_risk_params()` 更新 sizing mode、order fraction、auto-trade 开关、
+    max order/market/event/category/total exposure、cash buffer、fee/slippage 参数。
+  - `load_paper_account()`、`load_paper_accounts()`、
+    `load_account_transactions()`、`account_summary()` 查询账户状态。
+- `scripts/run_paper_account.py`
+  - 本地账户管理 CLI。
+- `src/beatodds/common/types.py`
+  - 定义 `PaperAccount` 和 `PaperAccountTransaction`。
+- `tests/test_paper_store.py`
+  - 覆盖 account create/load/update、现金流水、reserve/release、负余额保护。
+
+入口命令：
+
+```bash
+uv run scripts/run_paper_account.py --create-default
+uv run scripts/run_paper_account.py --show
+uv run scripts/run_paper_account.py --transactions
+uv run scripts/run_paper_account.py --deposit 100 --memo "manual top up"
+uv run scripts/run_paper_account.py --reserve 25 --memo "paper order reserve"
+uv run scripts/run_paper_account.py --release 25 --memo "paper order cancelled"
+uv run scripts/run_paper_account.py --max-order-notional 50 --max-event-exposure 500
+```
+
+当前限制：
+
+- 尚未实现 `paper_orders`、`paper_fills`、`paper_positions`、`paper_marks`、
+  `paper_settlements`。
+- 账户现金 reserve 还没有绑定真实 paper order id。
+- GUI 的 Login / Trading Config 已接入 `paper_accounts`。当前 paper deal 仍是
+  simulated action log，尚未写入正式 order/fill/position 账本。
+
 ## 主要运行流程
 
 ### Scanner-only 流程
@@ -365,30 +423,94 @@ stored forecast rows
 - `src/beatodds/evaluation/workflow_store.py`
 - `src/beatodds/evaluation/metrics.py`
 
+### 本地 GUI 流程
+
+```text
+data/beatodds.duckdb
+  -> events + latest markets
+  -> left rail event list
+  -> selected event detail
+  -> selected market workbench
+```
+
+当前 GUI 已按 Polymarket 的 event → market 层级组织：
+
+- 左侧是 event list，不再是 market list。
+- 中部展示 selected event 的 icon、tags、title/meta、event 下 markets、规则/盘口
+  背景 tab、event 级统计和 brief。
+- event 下每个 market 以卡片展示，带显眼的 YES/NO token display button。
+- 点击 YES 或 NO 会切换当前查看的 token side，并用对应 token id 读取 CLOB
+  order book。
+- 右侧展示 selected market 的 live price、完整可滚动盘口、forecast/evidence 和
+  operator actions。盘口显示 asks/bids 的 price、shares、total，不画累积深度曲线。
+- 顶栏提供当前 paper user 入口。点击当前 user 进入 User page；登录不做密码，
+  在 User page 内列出本地已注册 paper accounts，点击账户按钮即可切换；
+  也可以只输入 name 创建新本地账户。
+- GUI 已拆出独立 User page。顶栏点击当前 user 进入账户页，主市场页不再堆放
+  账户配置。
+- User page 左侧 sidebar 提供 Overview、基础设置、资金管理、持仓与交易、
+  Agent Pattern 入口。
+- User page 的基础设置支持 name、icon URL、notes；资金管理支持 deposit /
+  withdraw 并写入 `paper_account_transactions`。
+- User page 的持仓与交易页展示当前 simulated exposure、历史 GUI paper deal
+  记录、NAV 曲线、账户统计量。正式 orders/fills/positions 尚未实现，所以这里
+  目前聚合的是 GUI simulated paper deal。
+- User page 的 Agent Pattern 是 agent trading pattern 驾驶室，可以配置 all-in/
+  fixed/fraction sizing、order fraction、max order、cash buffer、fee、slippage、
+  total exposure 和 autonomous paper order 开关。
+- `Paper deal` 会读取当前登录账户的 sizing/fee/slippage 配置来估算 notional、
+  shares、fee 和 projected PnL。
+- `/api/state` 只返回 event shell 和非阻塞状态。
+- `/api/market/<condition_id>?side=YES|NO` 单独加载 live CLOB quote，避免首屏被慢
+  盘口请求卡住，并把 forecast/chart 概率转换到当前 token side。
+- 顶部提供 Dark/Light toggle；dark mode 使用接近 Polymarket 的黑色风格。
+- GUI runtime 状态仍保存在 ignored 的 `data/gui_state.json`。
+
+主要文件：
+
+- `gui/server.py`
+- `gui/web/index.html`
+- `gui/web/app.js`
+- `gui/web/styles.css`
+- `scripts/run_gui.py`
+
 ## 数据库当前状态
 
 数据库路径：
 
 ```text
+data/beatodds.duckdb
 data/eval.duckdb
 ```
 
-该路径被 git ignore。它是本地运行状态，不应提交。
+这些路径被 git ignore。它们是本地运行状态，不应提交。
 
 操作约束：
 
 - DuckDB 使用文件锁。不要同时运行两个会打开 `data/eval.duckdb` 的命令。
 - `--show-stored`、`--show-workflow`、`--show-market`、`--show-due` 和 batch
   forecast 命令都应串行运行。
+- `scripts/run_paper_account.py` 也会打开 `data/eval.duckdb`，应与 batch eval /
+  workflow 查询命令串行运行。
 
 时间约定：
 
 - workflow DB 写入时会把 timezone-aware datetime 统一转成 UTC-naive。
 - 旧本地 rows 可能仍是修复前写入的 local-naive 时间，刷新市场后会被新记录覆盖。
 
-### 两层 DB 结构
+### 两类 DB 结构
 
-当前同一个 DuckDB 文件里有两层数据。
+`data/beatodds.duckdb` 是市场大盘层：
+
+- `events`：Gamma event 元数据，作为用户可理解的组织容器。
+- `events.image`、`events.icon`：event 页视觉标识。
+- `markets`：最小可交易单元，带 `condition_id` 和 `event_id`。
+- `markets.outcome_prices_json`：YES/NO 等 outcome 的当前 Gamma price，用于 GUI
+  token display。
+- `price_snapshots`、`price_history`、`resolutions`、`evidence_items`、
+  `edge_scores`：较早的通用市场数据表。
+
+`data/eval.duckdb` 是 live workflow/evaluation 层。
 
 `eval_records` 是 compact compatibility layer：
 
@@ -403,23 +525,37 @@ workflow tables 是 long-running state layer：
 - 使用入口：`--show-workflow`、`--show-market`、`--show-due`。
 - 实现文件：`src/beatodds/evaluation/workflow_store.py`。
 
+paper trading tables 是 account/ledger layer：
+
+- 用途：保存 paper trading 账户、风险参数和现金流水。
+- 使用入口：`scripts/run_paper_account.py`。
+- 实现文件：`src/beatodds/evaluation/paper_store.py`。
+
 ### 当前本地表计数
 
-2026-05-25 从 `data/eval.duckdb` 观测到：
+2026-06-03 从本地 DuckDB 观测到：
 
 | Table | Rows | 用途 |
 |---|---:|---|
-| `eval_records` | 6 | 之后计算 BSS 的 compact forecast samples |
+| `events` | 40 | 当前最新流动 market 批次关联的 Gamma events |
+| `markets` | 350 | 本地累计 market 元数据；GUI 只读最新 `fetched_at` 批次 |
+| `latest markets` | 100 | 最新一次 backfill 批次的 market 数 |
+| `events with icon` | 37 | 可用于 GUI event icon 的 Gamma event |
+| `markets with outcome prices` | 100 | 最新批次已有 YES/NO token display price |
+| `eval_records` | 14 | 之后计算 BSS 的 compact forecast samples |
 | `tracked_markets` | 1 | 长期追踪的市场状态 |
-| `market_snapshots` | 1 | 不可变盘口快照 |
+| `market_snapshots` | 3 | 不可变盘口快照 |
 | `resolution_features` | 1 | 解析后的 resolution/search features |
-| `forecast_runs` | 1 | 完整 forecast run 记录 |
-| `workflow_evidence_items` | 16 | forecast run 关联证据 |
+| `forecast_runs` | 2 | 完整 forecast run 记录 |
+| `workflow_evidence_items` | 27 | forecast run 关联证据 |
 | `outcomes` | 0 | 已解决 outcome |
+| `paper_accounts` | 1 | paper trading 账户；本地默认 demo account |
+| `paper_account_transactions` | 1 | account cash ledger；默认账户创建流水 |
 
-### 当前 compact eval records
+### compact eval records
 
-`uv run scripts/run_batch_eval.py --show-stored` 当前显示 6 条 unresolved records：
+`uv run scripts/run_batch_eval.py --show-stored` 可查看当前 compact records。
+2026-06-03 本地共有 14 条 `eval_records`。下面是早期 live run 的示例片段：
 
 | condition id prefix | `p_m` | `p_f` | edge | model | resolved |
 |---|---:|---:|---:|---|---|
@@ -433,12 +569,12 @@ workflow tables 是 long-running state layer：
 当前 edge summary：
 
 ```text
-n = 6
-mean_edge = -0.0372
-mean_abs_edge = 0.0516
+n = 14
+mean_edge = -0.0188
+mean_abs_edge = 0.0249
 max_edge = +0.0305
 min_edge = -0.1105
-pct |edge| > 3% = 66.7%
+pct |edge| > 3% = 35.7%
 ```
 
 当前没有 resolved rows，所以：
@@ -459,9 +595,9 @@ No resolved records yet. Run after markets settle and use --resolve.
 
 ```text
 tracked_markets = 1
-market_snapshots = 1
-forecast_runs = 1
-evidence_items = 16
+market_snapshots = 3
+forecast_runs = 2
+evidence_items = 27
 outcomes = 0
 ```
 
@@ -480,43 +616,42 @@ resolved = None
 condition_type = election
 search_queries =
   JD Vance 2028 presidential campaign
-  2028 US presidential election polls
-  2028 election candidates Republican
-  JD Vance VP 2024
+  2028 US presidential election candidates
+  2028 election polls JD Vance
 ```
 
 已存 snapshot：
 
 ```text
-snapshot_time = 2026-05-25T13:44:01.422388
+snapshot_time = 2026-05-25T11:54:15.453810
 p_m = 0.190
 bid = 0.189
 ask = 0.190
 spread = 0.001
-flags = neg_risk
+flags = refresh
 ```
 
-已存 forecast run：
+最新 forecast run：
 
 ```text
-run_id prefix = b60e932d
+run_id prefix = 9a8c9fdf
 signal_type = search_only_llm
 model = deepseek-chat
 p_m = 0.190
-p_f = 0.220
-edge = +0.030
-confidence = 0.40
+p_f = 0.150
+edge = -0.040
+confidence = 0.30
 ```
 
 最新 evidence 样例：
 
 | score | query | source/title |
 |---:|---|---|
-| 1.000 | `JD Vance 2028 presidential campaign` | `ballotpedia.org: J.D. Vance - Ballotpedia` |
-| 1.000 | `JD Vance 2028 presidential campaign` | `en.wikipedia.org: 2028 United States presidential election - Wikipedia` |
-| 1.000 | `JD Vance 2028 presidential campaign` | `polymarket.com: Presidential Election Winner 2028 Predictions & Odds` |
-| 0.999 | `JD Vance 2028 presidential campaign` | `apnews.com: Who is JD Vance, Trump's pick for VP?` |
-| 0.999 | `JD Vance 2028 presidential campaign` | `realclearpolling.com: Latest Polls 2028` |
+| 1.000 | `2028 election polls JD Vance` | `newsweek.com: JD Vance's 2028 presidential election chances plunge in new poll` |
+| 1.000 | `2028 election polls JD Vance` | `zogbyanalytics.com: JD Vance’s Chances of Beating Harris, Newsom in 2028 Election` |
+| 1.000 | `2028 election polls JD Vance` | `sports.yahoo.com: Kamala Harris’ Chances of Beating JD Vance, New 2028 Poll Shows` |
+| 0.999 | `2028 US presidential election candidates` | `ballotpedia.org: Presidential candidates, 2028` |
+| 0.999 | `2028 US presidential election candidates` | `ballotpedia.org: List of registered 2028 presidential candidates` |
 
 due-market 状态：
 
@@ -638,6 +773,47 @@ No tracked markets are due for a new forecast.
 - `resolved_outcome`
 - `recorded_at`
 
+`paper_accounts`：
+
+- `account_id`
+- `name`
+- `base_currency`
+- `initial_cash`
+- `cash_balance`
+- `reserved_cash`
+- `status`
+- `risk_profile`
+- `sizing_mode`
+- `order_fraction`
+- `auto_trade_enabled`
+- `max_order_notional`
+- `max_market_exposure`
+- `max_event_exposure`
+- `max_category_exposure`
+- `max_total_exposure`
+- `min_cash_buffer`
+- `fee_rate_bps`
+- `slippage_bps`
+- `created_at`
+- `updated_at`
+- `notes`
+
+`paper_account_transactions`：
+
+- `transaction_id`
+- `account_id`
+- `transaction_type`
+- `cash_delta`
+- `reserved_delta`
+- `cash_before`
+- `cash_after`
+- `reserved_before`
+- `reserved_after`
+- `ref_type`
+- `ref_id`
+- `memo`
+- `created_at`
+
 ### DB 函数
 
 Compact eval store：
@@ -663,6 +839,21 @@ Compact eval store：
 - `load_evidence_for_run(run_id)`
 - `workflow_summary()`
 - `load_resolution_features(condition_id)`
+
+Paper trading account store：
+
+- `create_paper_account(...)`
+- `ensure_default_paper_account(initial_cash=10000.0)`
+- `load_paper_account(account_id='demo')`
+- `load_paper_accounts(limit=50)`
+- `update_risk_params(account_id='demo', ...)`
+- `deposit_cash(account_id, amount, memo='')`
+- `withdraw_cash(account_id, amount, memo='')`
+- `reserve_cash(account_id, amount, memo='')`
+- `release_reserved_cash(account_id, amount, memo='')`
+- `adjust_cash(account_id, cash_delta, memo='')`
+- `load_account_transactions(account_id='demo', limit=50)`
+- `account_summary()`
 
 ## 按层划分的文件地图
 
@@ -703,8 +894,10 @@ Compact eval store：
 
 - `src/beatodds/evaluation/store.py`：compact `eval_records` storage。
 - `src/beatodds/evaluation/workflow_store.py`：long-running workflow database。
+- `src/beatodds/evaluation/paper_store.py`：paper trading accounts 和 cash ledger。
 - `src/beatodds/evaluation/metrics.py`：Brier/log-loss metrics。
 - `scripts/run_batch_eval.py`：主 live evaluation CLI。
+- `scripts/run_paper_account.py`：paper account CLI。
 
 测试：
 
@@ -712,6 +905,7 @@ Compact eval store：
 - `tests/test_eval_store.py`：compact eval store roundtrip 和 resolution。
 - `tests/test_workflow_store.py`：workflow DB market/snapshot、forecast/evidence、
   outcome、due-market tests。
+- `tests/test_paper_store.py`：paper account、risk params、cash ledger tests。
 
 参考资料：
 
@@ -727,16 +921,19 @@ Compact eval store：
 
 - 没有自动 outcome resolver。
 - 没有 `eval_metrics` 表。
-- 没有现有 DuckDB 文件的 schema migration layer。
+- 只有轻量 schema migration：`markets.event_id`、`markets.outcome_prices_json`、
+  `events.image`、`events.icon` 可自动补列；还没有完整版本化 migration layer。
 - 没有 `--forecast-due` 命令。
 - 没有 tracked due markets 的 current-price refresh。
 - 没有 prompt hash 或 raw prompt storage。
 - 没有 empirical calibration 或 market+LLM ensemble。
 - 没有单独的 durable scan-run table。
+- 没有 paper orders/fills/positions/marks/settlements。
 
 下一步工程：
 
-1. 为 tracked due markets 刷新当前 order-book snapshots。
-2. 在 snapshot refresh 后增加 `--forecast-due`。
-3. 增加本地 DuckDB schema migration safety。
-4. 在 forecast records 和 metrics 中增加 baseline-family grouping。
+1. 实现 `paper_orders` 和基于 CLOB depth 的 `paper_fills`。
+2. 从 fills 聚合 `paper_positions`，并用 live CLOB 写 `paper_marks`。
+3. 为 tracked due markets 刷新当前 order-book snapshots。
+4. 在 snapshot refresh 后增加 `--forecast-due`。
+5. 增加完整、版本化的本地 DuckDB schema migration safety。

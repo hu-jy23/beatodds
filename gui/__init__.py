@@ -1,2 +1,1 @@
 """Local BeatOdds GUI server."""
-
