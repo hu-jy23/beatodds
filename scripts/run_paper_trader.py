@@ -237,30 +237,49 @@ def _parse_args():
     parser = argparse.ArgumentParser(description="Run live BeatOdds paper trading")
     parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
     parser.add_argument("--initial-cash", type=float, default=1_000.0)
-    parser.add_argument("--top", type=int, default=5)
-    parser.add_argument("--exclude-sports", action="store_true", default=True)
+    parser.add_argument("--top", type=int, default=12)
+    parser.add_argument("--trial-aggressive", action="store_true",
+                        help="Use a broader, more purchase-friendly trial policy")
+    parser.add_argument("--exclude-sports", action="store_true", default=False)
     parser.add_argument("--include-sports", action="store_false", dest="exclude_sports")
     parser.add_argument("--min-prob", type=float, default=0.05)
     parser.add_argument("--max-prob", type=float, default=0.95)
-    parser.add_argument("--max-spread", type=float, default=0.05)
-    parser.add_argument("--min-edge", type=float, default=0.03)
-    parser.add_argument("--min-net-edge", type=float, default=0.01)
-    parser.add_argument("--min-confidence", type=float, default=0.25)
-    parser.add_argument("--min-order-notional", type=float, default=5.0)
-    parser.add_argument("--max-order-notional", type=float, default=100.0)
+    parser.add_argument("--max-spread", type=float, default=0.08)
+    parser.add_argument("--min-edge", type=float, default=0.015)
+    parser.add_argument("--min-net-edge", type=float, default=0.0)
+    parser.add_argument("--min-confidence", type=float, default=0.15)
+    parser.add_argument("--min-order-notional", type=float, default=2.0)
+    parser.add_argument("--max-order-notional", type=float, default=60.0)
     parser.add_argument("--order-fraction", type=float, default=1.0)
-    parser.add_argument("--min-order-fraction", type=float, default=0.02)
-    parser.add_argument("--max-order-fraction", type=float, default=0.10)
-    parser.add_argument("--edge-size-multiplier", type=float, default=1.5)
-    parser.add_argument("--max-market-exposure", type=float, default=150.0)
-    parser.add_argument("--max-event-exposure", type=float, default=250.0)
-    parser.add_argument("--max-category-exposure", type=float, default=400.0)
+    parser.add_argument("--min-order-fraction", type=float, default=0.01)
+    parser.add_argument("--max-order-fraction", type=float, default=0.06)
+    parser.add_argument("--edge-size-multiplier", type=float, default=1.25)
+    parser.add_argument("--max-market-exposure", type=float, default=180.0)
+    parser.add_argument("--max-event-exposure", type=float, default=400.0)
+    parser.add_argument("--max-category-exposure", type=float, default=800.0)
     parser.add_argument("--max-total-exposure", type=float, default=1_000.0)
     parser.add_argument("--min-cash-buffer", type=float, default=0.0)
     parser.add_argument("--fee-rate-bps", type=float, default=0.0)
     parser.add_argument("--slippage-bps", type=float, default=0.0)
+    parser.add_argument("--evidence-results-per-query", type=int, default=8)
+    parser.add_argument("--forecast-evidence-items", type=int, default=16)
+    parser.add_argument("--forecast-max-tokens", type=int, default=512)
     parser.add_argument("--log-path", type=Path, default=DEFAULT_LOG_PATH)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.trial_aggressive:
+        args.top = max(args.top, 20)
+        args.max_spread = max(args.max_spread, 0.10)
+        args.min_edge = min(args.min_edge, 0.005)
+        args.min_net_edge = min(args.min_net_edge, -0.005)
+        args.min_confidence = min(args.min_confidence, 0.10)
+        args.min_order_notional = min(args.min_order_notional, 1.0)
+        args.max_order_notional = min(args.max_order_notional, 40.0)
+        args.min_order_fraction = min(args.min_order_fraction, 0.005)
+        args.max_order_fraction = min(args.max_order_fraction, 0.04)
+        args.evidence_results_per_query = max(args.evidence_results_per_query, 10)
+        args.forecast_evidence_items = max(args.forecast_evidence_items, 20)
+        args.forecast_max_tokens = max(args.forecast_max_tokens, 768)
+    return args
 
 
 def main() -> None:
@@ -296,7 +315,10 @@ def main() -> None:
 
     rp = ResolutionParser()
     retriever = EvidenceRetriever()
-    forecaster = LLMForecaster()
+    forecaster = LLMForecaster(
+        max_evidence_items=args.forecast_evidence_items,
+        max_tokens=args.forecast_max_tokens,
+    )
     clob = ClobReadClient()
     eval_records: list[EvalRecord] = []
     trades = 0
@@ -321,7 +343,11 @@ def main() -> None:
         }
         try:
             features = rp.parse(candidate.market)
-            evidence, frozen_at = retriever.retrieve(candidate, features)
+            evidence, frozen_at = retriever.retrieve(
+                candidate,
+                features,
+                max_results_per_query=args.evidence_results_per_query,
+            )
             forecast = forecaster.forecast(candidate, evidence, frozen_at)
             forecast_run_id = save_forecast_run(
                 candidate=candidate,
@@ -360,6 +386,7 @@ def main() -> None:
             net_edge = side["gross_edge"] - fee_rate - slip
             decision.update({
                 "side": side["side"],
+                "token_id": side["token_id"],
                 "best_ask": side["best_ask"],
                 "side_fair_prob": side["side_fair_prob"],
                 "gross_edge": side["gross_edge"],

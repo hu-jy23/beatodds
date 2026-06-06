@@ -46,9 +46,11 @@ confidence: 0.1=very uncertain (stay near market), 1.0=high certainty from stron
 
 
 class LLMForecaster:
-    def __init__(self):
+    def __init__(self, max_evidence_items: int = 10, max_tokens: int = 256):
         self.cfg = get_settings()
         self._client = None
+        self.max_evidence_items = max(1, max_evidence_items)
+        self.max_tokens = max(128, max_tokens)
 
     def _get_client(self):
         if self._client is not None:
@@ -111,7 +113,7 @@ class LLMForecaster:
 
         evidence_text = "\n\n".join(
             f"[{i+1}] {e.title} ({e.source}, {e.published_at.strftime('%Y-%m-%d')})\n{e.summary}"
-            for i, e in enumerate(evidence[:10])
+            for i, e in enumerate(evidence[:self.max_evidence_items])
         ) if evidence else "No external evidence available."
 
         resolution_str = (
@@ -162,7 +164,7 @@ class LLMForecaster:
     def _call_anthropic(self, client, user_text: str, resolution_str: str) -> str:
         response = client.messages.create(
             model=self.cfg.anthropic_model,
-            max_tokens=256,
+            max_tokens=self.max_tokens,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": [
                 {"type": "text", "text": user_text,
@@ -174,7 +176,7 @@ class LLMForecaster:
     def _call_openai(self, client, user_text: str, model: str | None = None) -> str:
         response = client.chat.completions.create(
             model=model or self.cfg.openai_model,
-            max_tokens=256,
+            max_tokens=self.max_tokens,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_text},

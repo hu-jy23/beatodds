@@ -140,6 +140,17 @@ As of 2026-05-25:
   parser, Tavily retriever, and LLM forecaster, buys YES or NO only when
   executable ask-depth edge passes thresholds, persists workflow/eval records,
   and appends every decision including skips to `data/paper_decisions.jsonl`.
+  As of 2026-06-06, paper-trading trial defaults are more exploratory:
+  default `--top` is 12, sports are included unless `--exclude-sports` is
+  passed, entry thresholds are lower, forecast calls can use more evidence
+  items and response tokens, and `--trial-aggressive` expands to at least 20
+  markets with smaller tickets to place more diversified paper orders.
+  Paper decision evaluation entry point:
+  `uv run scripts/run_paper_eval.py --account-id paper-live-1000 --top-k 5`
+  or `uv run scripts/run_paper_eval.py --account-id paper-live-1000 --all`.
+  It reads `data/paper_decisions.jsonl`, selects buy decisions by forecast
+  confidence, resolves token IDs from the log/ledger/local DBs, refreshes CLOB
+  best bids, and reports mark-to-market unrealized PnL.
   Inspection entry point:
   `uv run scripts/run_paper_account.py --account-id paper-live-1000 --show --orders --positions --transactions`.
 - Current uncommitted development includes:
@@ -190,6 +201,9 @@ uv run scripts/backfill_markets.py --incremental
 uv run scripts/run_paper_account.py --create-default
 uv run scripts/run_paper_account.py --show --transactions
 uv run scripts/run_paper_trader.py --top 5
+uv run scripts/run_paper_trader.py --trial-aggressive
+uv run scripts/run_paper_eval.py --account-id paper-live-1000 --top-k 5
+uv run scripts/run_paper_eval.py --account-id paper-live-1000 --all
 ```
 
 Observed live eval state:
@@ -216,6 +230,14 @@ Observed live eval state:
 - Paper-trading PnL is now evaluated through the durable ledger plus live
   re-marking/re-checking. Decision logs live under ignored `data/` and should
   not be committed.
+- Latest aggressive trial on 2026-06-06 forecasted 20 markets, placed 16 paper
+  buys, and left `paper-live-1000` with $502.04 cash, 18 total orders, and 17
+  open positions.
+- Latest paper eval on 2026-06-06: top-5 confidence buys marked 5/5,
+  invested $187.19, current bid liquidation value $185.07, PnL -$2.12
+  (-1.13%). All buys marked 18/18, invested $497.96, value $488.31,
+  PnL -$9.65 (-1.94%). This is mark-to-market at current best bids, not final
+  resolution PnL.
 
 ## Milestone Plan
 
@@ -511,9 +533,10 @@ Current state:
 - Account, order, fill, and position ledger tables exist in `data/eval.duckdb`.
 - `run_paper_trader.py` performs a live buy-only paper pass from $1000 capital,
   logs all decisions to JSONL, and persists workflow/eval provenance.
-- Re-checking and mark-to-market reporting still need to be added so a later run
-  can price open positions, estimate unrealized PnL, and report hit/drawdown
-  metrics before final market resolution.
+- `run_paper_eval.py` can re-check `paper_decisions.jsonl`, select top-k
+  confidence buys or all buys, and report current bid-based unrealized PnL.
+- Durable mark snapshots, final resolution PnL, and drawdown/hit-rate reporting
+  still need to be added.
 
 Acceptance:
 
@@ -544,9 +567,8 @@ Detailed next plan:
    repeated forecasts for opinion drift.
 6. Keep the existing `eval_records` compatibility path until the new workflow DB
    is validated over several live runs.
-7. Add a `run_paper_recheck.py` or equivalent command that reloads open
-   `paper_positions`, refreshes YES/NO CLOB quotes, estimates unrealized PnL,
-   and appends mark snapshots to the paper ledger/log.
+7. Extend `run_paper_eval.py` to append durable mark snapshots to the paper
+   ledger/log and add final resolution PnL plus drawdown/hit-rate reports.
 
 ## Planning Protocol
 
