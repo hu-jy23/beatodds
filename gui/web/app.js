@@ -14,9 +14,23 @@ const app = {
   userSection: localStorage.getItem("beatodds-user-section") || "overview",
   expandedPositionEvents: new Set(),
   expandedTradeEvents: new Set(),
+  maintainerRunning: false,
+  maintainerPoll: null,
 };
 
 const $ = (id) => document.getElementById(id);
+
+function logControl(action, detail = {}) {
+  console.info(`[BeatOdds] ${action}`, {
+    at: new Date().toISOString(),
+    selectedEventId: app.selectedEventId,
+    selectedMarketId: app.selectedMarketId,
+    selectedSide: app.selectedSide,
+    page: app.page,
+    userSection: app.userSection,
+    ...detail,
+  });
+}
 
 function fmtPct(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
@@ -57,6 +71,16 @@ function fmtSignedMoney(value) {
   return `${sign}$${Math.abs(n).toFixed(2)}`;
 }
 
+function fmtMaybeSignedMoney(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  return fmtSignedMoney(value);
+}
+
+function pnlClass(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "muted";
+  return Number(value) >= 0 ? "positive" : "negative";
+}
+
 function shortId(id) {
   return id ? `${id.slice(0, 10)}...${id.slice(-5)}` : "--";
 }
@@ -79,13 +103,33 @@ async function loadState() {
   if (app.page === "markets") refreshSelectedMarketDetail();
 }
 
+async function refreshAccountPositions(source = "positions section") {
+  logControl("account positions refresh clicked", { source });
+  await loadState();
+  app.page = "user";
+  app.userSection = "positions";
+  localStorage.setItem("beatodds-page", app.page);
+  localStorage.setItem("beatodds-user-section", app.userSection);
+  render();
+  logControl("account positions refresh finished", {
+    positions: app.state.account_context?.positions?.length || 0,
+    trades: app.state.account_context?.trade_records?.length || 0,
+  });
+}
+
 async function post(path, payload) {
+  logControl("POST start", { path, payload });
   app.state = await api(path, { method: "POST", body: JSON.stringify(payload) });
   app.selectedEventId = app.state.selected_event?.event_id || app.selectedEventId;
   app.selectedMarketId = app.state.selected?.market?.condition_id || app.selectedMarketId;
   app.selectedSide = app.state.selected?.side || app.state.state.selected_side || app.selectedSide || "YES";
+  logControl("POST complete", {
+    path,
+    selectedEventForecasts: app.state.selected_event?.edge_count || 0,
+    selectedEventDirection: app.state.selected_event?.forecast_direction || "observe",
+  });
   render();
-  if (app.page === "markets") refreshSelectedMarketDetail();
+  if (app.page === "markets") await refreshSelectedMarketDetail();
 }
 
 async function refreshSelectedMarketDetail() {
@@ -96,8 +140,20 @@ async function refreshSelectedMarketDetail() {
     const payload = await api(`/api/market/${encodeURIComponent(marketId)}?side=${encodeURIComponent(side)}`);
     if (marketId !== app.selectedMarketId || !payload.selected) return;
     app.state.selected = payload.selected;
+    if (payload.selected_event) {
+      app.state.selected_event = payload.selected_event;
+      const idx = (app.state.events || []).findIndex((event) => (
+        event.event_id === payload.selected_event.event_id
+      ));
+      if (idx >= 0) app.state.events[idx] = payload.selected_event;
+    }
     app.selectedSide = payload.selected.side || side;
     app.state.state.selected_side = app.selectedSide;
+    logControl("market detail refreshed", {
+      forecasts: app.state.selected_event?.edge_count || 0,
+      direction: app.state.selected_event?.forecast_direction || "observe",
+    });
+    renderMarkets();
     renderSelected();
     renderTimeline();
     renderCharts();
@@ -225,6 +281,7 @@ function renderUserPage() {
     profile: "userProfileSection",
     funds: "userFundsSection",
     positions: "userPositionsSection",
+    maintainer: "userMaintainerSection",
     agent: "userAgentSection",
   };
   Object.entries(sectionIds).forEach(([key, id]) => {
@@ -235,8 +292,8 @@ function renderUserPage() {
     ["Equity", fmtMoney(account.equity), "cash + reserved"],
     ["Available", fmtMoney(account.available_cash), "after cash buffer"],
     ["Reserved", fmtMoney(account.reserved_cash), "open reserves"],
-    ["Trades", String(stats.trade_count || 0), `${stats.position_count || 0} simulated positions`],
-    ["Est. PnL", fmtSignedMoney(stats.estimated_pnl || 0), "from GUI paper deals"],
+    ["Trades", String(stats.trade_count || 0), `${stats.position_count || 0} open positions`],
+    ["PnL", fmtSignedMoney(stats.estimated_pnl || 0), "cash + open cost basis"],
     ["Ledger rows", String(stats.transaction_count || 0), "account transactions"],
   ]
     .map(([label, value, detail]) => `
@@ -269,10 +326,23 @@ function renderUserPage() {
     .map(([label, value]) => `<div class="mini-stat"><span>${label}</span><strong>${value}</strong></div>`)
     .join("");
 
-  $("positionStatus").textContent = `${positions.length} simulated positions`;
+  $("accountMoneyStrip").innerHTML = [
+    ["Cash", fmtMoney(stats.cash_balance ?? account.cash_balance), "available paper cash"],
+    ["Share hold", fmtMoney(stats.projected_share_value ?? stats.share_hold_cost), `${fmtMoney(stats.share_hold_cost || 0)} cost`],
+    ["Total money", fmtMoney(stats.total_account_money ?? account.equity), "cash + reserved + shares"],
+    ["Earn / loss", fmtMaybeSignedMoney(stats.total_earn_loss), `initial ${fmtMoney(stats.initial_cash ?? account.initial_cash)}`],
+  ].map(([label, value, detail]) => `
+    <div class="account-money-cell ${label === "Earn / loss" ? pnlClass(stats.total_earn_loss) : ""}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(detail)}</small>
+    </div>
+  `).join("");
+
+  $("positionStatus").textContent = `${positions.length} formal positions`;
   $("positionList").innerHTML = positionGroups.length
     ? renderEventPositionGroups(positionGroups)
-    : `<div class="empty-panel">No formal positions yet. Simulated paper deals will aggregate here.</div>`;
+    : `<div class="empty-panel">No formal open positions yet.</div>`;
 
   $("tradeStatus").textContent = `${trades.length} records`;
   $("tradeList").innerHTML = tradeGroups.length
@@ -280,6 +350,84 @@ function renderUserPage() {
     : `<div class="empty-panel">No paper trade records yet.</div>`;
 
   if (app.page === "user") drawUserNavChart($("userNavChart"), context.nav_points || []);
+  renderMaintainerSection(context);
+}
+
+function renderMaintainerSection(context) {
+  const account = context.selected_account || {};
+  const stats = context.user_stats || {};
+  const maintainer = context.maintainer || {};
+  const summary = maintainer.summary || {};
+  const params = maintainer.params || {};
+  const positions = context.positions || [];
+  const decisions = maintainer.recent_decisions || [];
+  const consoleLogs = maintainer.console_logs || [];
+  $("maintainerStatusPill").textContent = app.maintainerRunning ? "running" : (summary.last_run_id ? "ready" : "not run");
+  $("earningStatus").textContent =
+    `${fmtSignedMoney(stats.estimated_pnl || 0)} · ${fmtMoney(stats.open_cost_basis || 0)} open cost`;
+  $("strategyStatus").textContent = summary.last_finished_at
+    ? new Date(summary.last_finished_at).toLocaleString()
+    : "no completed run";
+  $("strategyGrid").innerHTML = [
+    ["Entry edge", `${fmtPct(params.min_edge || 0)} gross / ${fmtPct(params.min_net_edge || 0)} net`],
+    ["Confidence", fmtPct(params.min_confidence || 0)],
+    ["Spread cap", fmtPct(params.max_spread || 0)],
+    ["Order cap", fmtMoney(params.max_order_notional || account.max_order_notional || 0)],
+    ["Sell return", fmtPct(params.sell_min_return || 0)],
+    ["Stop loss", fmtPct(params.sell_max_loss || 0)],
+    ["Last sold", String(summary.last_sold || 0)],
+    ["Last buys", String(summary.last_buys || 0)],
+  ].map(([label, value]) => `
+    <div class="strategy-cell">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `).join("");
+  $("maintainerPositionStatus").textContent = `${positions.length} open positions`;
+  $("maintainerPositionList").innerHTML = positions.length
+    ? positions.map((pos) => `
+      <div class="market-exposure-row">
+        <span>
+          <strong>${escapeHtml(pos.question || shortId(pos.condition_id))}</strong>
+          <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · avg ${fmtToken(pos.avg_price)}</small>
+        </span>
+        <span>${fmtMoney(pos.notional)} cost</span>
+        <b class="${pnlClass(pos.estimated_pnl)}">${fmtMaybeSignedMoney(pos.estimated_pnl)}</b>
+      </div>
+    `).join("")
+    : `<div class="empty-panel">No open shares for this account.</div>`;
+  $("maintainerDecisionStatus").textContent = `${decisions.length} recent rows`;
+  $("maintainerDecisionList").innerHTML = decisions.length
+    ? decisions.map((row) => `
+      <div class="trade-row">
+        <strong>${escapeHtml(row.action || row.phase || "decision")} · ${escapeHtml(row.side || "")}</strong>
+        <span>${row.created_at ? new Date(row.created_at).toLocaleString() : ""}</span>
+        <b class="${pnlClass(row.realized_pnl)}">${fmtMaybeSignedMoney(row.realized_pnl)}</b>
+        <small>${escapeHtml(row.reason || row.question || shortId(row.condition_id))}</small>
+      </div>
+    `).join("")
+    : `<div class="empty-panel">No maintainer strategy records yet.</div>`;
+  renderMaintainerConsole("overviewMaintainerConsole", "overviewMaintainerConsoleStatus", consoleLogs);
+  renderMaintainerConsole("maintainerConsole", "maintainerConsoleStatus", consoleLogs);
+  if (app.page === "user") drawEarningChart($("earningCurveChart"), context.earning_points || []);
+}
+
+function renderMaintainerConsole(listId, statusId, logs) {
+  const list = $(listId);
+  if (!list) return;
+  $(statusId).textContent = `${logs.length} log rows`;
+  list.innerHTML = logs.length
+    ? logs.slice(0, 220).map((row) => `
+      <div class="console-log-row ${row.status === "error" ? "error" : ""}">
+        <div>
+          <strong>${escapeHtml(row.kind || "maintainer")}</strong>
+          <span>${row.at ? new Date(row.at).toLocaleString() : ""}</span>
+        </div>
+        <p>${escapeHtml(row.summary || "")}</p>
+        <pre>${escapeHtml(row.detail || "")}</pre>
+      </div>
+    `).join("")
+    : `<div class="empty-panel">No sell, purchase, or maintain logs yet.</div>`;
 }
 
 function renderEventPositionGroups(groups) {
@@ -291,7 +439,7 @@ function renderEventPositionGroups(groups) {
           <small>${escapeHtml(group.event_category || "Event")} · ${group.row_count} markets · ${group.trade_count} trades</small>
         </span>
         <span class="event-exposure-actions">
-          <b class="${Number(group.estimated_pnl || 0) >= 0 ? "positive" : "negative"}">${fmtSignedMoney(group.estimated_pnl)}</b>
+          <b class="${pnlClass(group.estimated_pnl)}">${fmtMaybeSignedMoney(group.estimated_pnl)}</b>
           <small>${app.expandedPositionEvents.has(group.event_id) ? "Hide markets" : "Show markets"}</small>
         </span>
       </button>
@@ -303,7 +451,7 @@ function renderEventPositionGroups(groups) {
               <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · ${pos.trade_count || 0} trades</small>
             </span>
             <span>${fmtMoney(pos.notional)} notional</span>
-            <b class="${Number(pos.estimated_pnl || 0) >= 0 ? "positive" : "negative"}">${fmtSignedMoney(pos.estimated_pnl)}</b>
+            <b class="${pnlClass(pos.estimated_pnl)}">${fmtMaybeSignedMoney(pos.estimated_pnl)}</b>
           </div>
         `).join("")}
       </div>
@@ -320,7 +468,7 @@ function renderEventTradeGroups(groups) {
           <small>${escapeHtml(group.event_category || "Event")} · ${group.trade_count} trade records</small>
         </span>
         <span class="event-exposure-actions">
-          <b class="${Number(group.estimated_pnl || 0) >= 0 ? "positive" : "negative"}">${fmtSignedMoney(group.estimated_pnl)}</b>
+          <b class="${pnlClass(group.estimated_pnl)}">${fmtMaybeSignedMoney(group.estimated_pnl)}</b>
           <small>${app.expandedTradeEvents.has(group.event_id) ? "Hide trades" : "Show trades"}</small>
         </span>
       </button>
@@ -332,7 +480,7 @@ function renderEventTradeGroups(groups) {
               <small>${trade.at ? new Date(trade.at).toLocaleString() : ""}</small>
             </span>
             <span>${escapeHtml(trade.side || "YES")} ${fmtSize(trade.size)} · ${fmtMoney(trade.notional)}</span>
-            <b class="${Number(trade.estimated_pnl || 0) >= 0 ? "positive" : "negative"}">${fmtSignedMoney(trade.estimated_pnl)}</b>
+            <b class="${pnlClass(trade.estimated_pnl)}">${fmtMaybeSignedMoney(trade.estimated_pnl)}</b>
           </div>
         `).join("")}
       </div>
@@ -358,16 +506,19 @@ function renderMarkets() {
       const stance = eventStanceClass(event);
       const tag = event.neg_risk_count ? `<span class="tag green">neg-risk</span>` : `<span class="tag">event</span>`;
       const mark = event.tracked_count ? `<span class="tag amber">tracked</span>` : "";
+      const forecastTag = event.edge_count
+        ? `<span class="tag ${forecastTagClass(event)}">${forecastDirectionLabel(event.forecast_direction)}</span>`
+        : "";
       return `
         <button class="market-item ${active} ${stance}" data-id="${event.event_id}">
           <span class="market-title">${escapeHtml(event.title)}</span>
           <span class="market-meta">
             <span>${fmtMoney(event.volume_24h)} vol</span>
-            <span>${tag}${mark}</span>
+            <span>${tag}${mark}${forecastTag}</span>
           </span>
           <span class="mini-row">
             <span>${escapeHtml(event.category || "Event")}</span>
-            <span>${event.market_count || 0} markets</span>
+            <span>${event.market_count || 0} markets · ${event.edge_count || 0} forecasts</span>
           </span>
         </button>
       `;
@@ -377,6 +528,7 @@ function renderMarkets() {
   document.querySelectorAll(".market-item").forEach((el) => {
     el.addEventListener("click", async () => {
       animateClick(el);
+      logControl("event selected", { eventId: el.dataset.id });
       await post("/api/select-event", { event_id: el.dataset.id });
       if (window.innerWidth < 980) {
         $("appShell").classList.add("left-collapsed");
@@ -400,8 +552,10 @@ function renderSelected() {
 
   if (app.page !== "user") $("selectedTitle").textContent = event.title;
   $("stance").textContent = event.category || "Event";
-  $("edgePill").textContent = `${event.edge_count || 0} forecasts`;
-  $("edgePill").className = `pill ${(event.max_abs_edge || 0) > 0.02 ? "good" : ""}`;
+  $("edgePill").textContent = event.edge_count
+    ? `${event.edge_count} forecasts · ${forecastDirectionLabel(event.forecast_direction)}`
+    : "0 forecasts";
+  $("edgePill").className = `pill ${forecastPillClass(event)}`;
   document.querySelector(".analysis-panel").className = `analysis-panel ${eventStanceClass(event)}`;
   renderEventHero(event);
   $("eventMarketCount").textContent = `${event.markets?.length || 0} markets`;
@@ -553,7 +707,9 @@ function renderEventMarkets(event) {
             const noActive = active && app.selectedSide === "NO" ? "active" : "";
             const edge = market.edge;
             const edgeText = edge === undefined ? "--" : fmtPct(edge);
-            const forecast = market.p_f === undefined ? "no forecast" : `fair ${fmtPct(market.p_f)}`;
+            const forecast = market.p_f === undefined
+              ? "no forecast"
+              : `${forecastDirectionLabel(market.forecast_direction)} · fair ${fmtPct(market.p_f)}`;
             return `
               <div class="event-market-row ${active}" data-id="${market.condition_id}">
                 <button class="market-main" data-id="${market.condition_id}" data-side="YES">
@@ -582,6 +738,10 @@ function renderEventMarkets(event) {
     el.addEventListener("click", async () => {
       animateClick(el);
       app.selectedSide = el.dataset.side || "YES";
+      logControl("market side selected", {
+        conditionId: el.dataset.id,
+        side: app.selectedSide,
+      });
       await post("/api/select-market", { condition_id: el.dataset.id, side: app.selectedSide });
     });
   });
@@ -788,9 +948,36 @@ function marketStanceClass(market) {
 }
 
 function eventStanceClass(event) {
-  if ((event.max_abs_edge || 0) > 0.02) return "stance-yes";
+  if ((event.edge_count || 0) > 0) {
+    if (event.forecast_direction === "tend_no") return "stance-no";
+    if (event.forecast_direction === "tend_yes") return "stance-yes";
+    if ((event.forecast_edge || 0) < -0.02) return "stance-no";
+    if ((event.forecast_edge || 0) > 0.02) return "stance-yes";
+    return "stance-observe";
+  }
   if ((event.neg_risk_count || 0) > 0) return "stance-track";
   return "stance-observe";
+}
+
+function forecastDirectionLabel(direction) {
+  if (direction === "tend_yes") return "tend yes";
+  if (direction === "tend_no") return "tend no";
+  return "observe";
+}
+
+function forecastTagClass(event) {
+  if (event.forecast_direction === "tend_yes") return "green";
+  if (event.forecast_direction === "tend_no") return "red";
+  return "amber";
+}
+
+function forecastPillClass(event) {
+  if (!event.edge_count) return "";
+  if (event.forecast_direction === "tend_yes") return "good";
+  if (event.forecast_direction === "tend_no") return "bad";
+  if ((event.forecast_edge || 0) > 0.02) return "good";
+  if ((event.forecast_edge || 0) < -0.02) return "bad";
+  return "";
 }
 
 function animateClick(button) {
@@ -918,6 +1105,31 @@ function drawUserNavChart(canvas, points) {
   ctx.fillStyle = cssVar("--muted");
   ctx.font = "11px system-ui";
   ctx.fillText(fmtMoney(values[values.length - 1]), 12, ctx.logicalHeight - 12);
+}
+
+function drawEarningChart(canvas, points) {
+  const ctx = setupCanvas(canvas);
+  clearChart(ctx, canvas, "Earning curve");
+  const values = (points || []).map((point) => Number(point.pnl || 0));
+  if (!values.length) {
+    ctx.fillStyle = cssVar("--muted");
+    ctx.font = "12px system-ui";
+    ctx.fillText("No earning history yet", 12, 54);
+    return;
+  }
+  const pad = 34;
+  const min = Math.min(-1, ...values) * 1.08;
+  const max = Math.max(1, ...values) * 1.08;
+  drawLine(ctx, values, min, max, pad, ctx.logicalWidth, ctx.logicalHeight, "#2f6df6");
+  const zeroY = ctx.logicalHeight - pad - ((0 - min) / Math.max(0.001, max - min)) * (ctx.logicalHeight - pad * 2);
+  ctx.strokeStyle = cssVar("--line");
+  ctx.beginPath();
+  ctx.moveTo(pad, zeroY);
+  ctx.lineTo(ctx.logicalWidth - pad, zeroY);
+  ctx.stroke();
+  ctx.fillStyle = values[values.length - 1] >= 0 ? cssVar("--green") : cssVar("--red");
+  ctx.font = "11px system-ui";
+  ctx.fillText(fmtSignedMoney(values[values.length - 1]), 12, ctx.logicalHeight - 12);
 }
 
 function setupCanvas(canvas) {
@@ -1057,6 +1269,7 @@ function escapeAttr(value) {
 }
 
 function setPage(page) {
+  logControl("page switch", { targetPage: page });
   app.page = page === "user" ? "user" : "markets";
   localStorage.setItem("beatodds-page", app.page);
   render();
@@ -1064,6 +1277,7 @@ function setPage(page) {
 }
 
 function setUserSection(section) {
+  logControl("user section switch", { section });
   app.userSection = section || "overview";
   localStorage.setItem("beatodds-user-section", app.userSection);
   renderUserPage();
@@ -1091,7 +1305,14 @@ function bindEvents() {
   document.querySelectorAll("button").forEach((button) => {
     button.addEventListener("pointerdown", () => animateClick(button));
   });
-  $("refreshBtn").addEventListener("click", loadState);
+  $("refreshBtn").addEventListener("click", () => {
+    if (app.page === "user" && app.userSection === "positions") {
+      refreshAccountPositions("global refresh button");
+      return;
+    }
+    logControl("manual refresh clicked");
+    loadState();
+  });
   $("marketsPageBtn").addEventListener("click", () => setPage("markets"));
   $("userPageBtn").addEventListener("click", () => setPage("user"));
   document.querySelectorAll(".user-nav-btn").forEach((button) => {
@@ -1100,10 +1321,12 @@ function bindEvents() {
   $("createAccountBtn").addEventListener("click", async () => {
     const name = $("newAccountName").value.trim();
     if (!name) return;
+    logControl("create account clicked", { name });
     $("newAccountName").value = "";
     await post("/api/create-account", { name });
   });
   $("saveProfileBtn").addEventListener("click", async () => {
+    logControl("save profile clicked");
     await post("/api/account-profile", {
       name: $("profileName").value,
       icon_url: $("profileIconUrl").value,
@@ -1111,6 +1334,7 @@ function bindEvents() {
     });
   });
   $("depositBtn").addEventListener("click", async () => {
+    logControl("deposit clicked", { amount: Number($("fundAmount").value || 0) });
     await post("/api/account-funds", {
       action: "deposit",
       amount: Number($("fundAmount").value || 0),
@@ -1119,6 +1343,7 @@ function bindEvents() {
     $("fundAmount").value = "";
   });
   $("withdrawBtn").addEventListener("click", async () => {
+    logControl("withdraw clicked", { amount: Number($("fundAmount").value || 0) });
     await post("/api/account-funds", {
       action: "withdraw",
       amount: Number($("fundAmount").value || 0),
@@ -1127,6 +1352,7 @@ function bindEvents() {
     $("fundAmount").value = "";
   });
   $("saveConfigBtn").addEventListener("click", async () => {
+    logControl("save account config clicked");
     await post("/api/account-config", {
       sizing_mode: $("sizingMode").value,
       order_fraction: Number($("orderFraction").value || 1),
@@ -1138,6 +1364,13 @@ function bindEvents() {
       auto_trade_enabled: $("autoTradeEnabled").checked,
     });
   });
+  $("refreshPositionsBtn").addEventListener("click", () => {
+    refreshAccountPositions("positions panel button");
+  });
+  $("maintainerUpdateBtn").addEventListener("click", () => runMaintainerAction("update"));
+  $("maintainerSellBtn").addEventListener("click", () => runMaintainerAction("sell"));
+  $("maintainerBuyBtn").addEventListener("click", () => runMaintainerAction("purchase"));
+  $("maintainerRunBtn").addEventListener("click", () => runMaintainerAction("maintain"));
   $("themeToggle").addEventListener("click", () => {
     applyTheme(app.theme === "dark" ? "light" : "dark");
   });
@@ -1161,21 +1394,36 @@ function bindEvents() {
   });
   $("trackBtn").addEventListener("click", () => {
     const tracked = new Set(app.state.state.tracked_ids || []);
+    logControl("track toggle clicked", {
+      nextTrack: !tracked.has(app.selectedMarketId),
+    });
     post("/api/track", {
       condition_id: app.selectedMarketId,
       track: !tracked.has(app.selectedMarketId),
     });
   });
-  $("dealBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedMarketId, action: "paper_deal" }));
-  $("followBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedMarketId, action: "follow_up" }));
-  $("reviewBtn").addEventListener("click", () => post("/api/action", { condition_id: app.selectedMarketId, action: "reviewed" }));
+  $("dealBtn").addEventListener("click", () => {
+    logControl("paper deal clicked");
+    post("/api/action", { condition_id: app.selectedMarketId, action: "paper_deal" });
+  });
+  $("followBtn").addEventListener("click", () => {
+    logControl("follow up clicked");
+    post("/api/action", { condition_id: app.selectedMarketId, action: "follow_up" });
+  });
+  $("reviewBtn").addEventListener("click", () => {
+    logControl("review clicked");
+    post("/api/action", { condition_id: app.selectedMarketId, action: "reviewed" });
+  });
   $("updateCurrentBtn").addEventListener("click", async () => {
+    logControl("update+forecast topic clicked");
     await runUpdate("topic");
   });
   $("updateTrackedBtn").addEventListener("click", async () => {
+    logControl("update+forecast tracked clicked");
     await runUpdate("tracked");
   });
   $("updateAllBtn").addEventListener("click", async () => {
+    logControl("update+forecast all dialog opened");
     openUpdateDialog();
   });
   $("closeUpdateDialog").addEventListener("click", closeUpdateDialog);
@@ -1189,6 +1437,7 @@ function bindEvents() {
   $("confirmUpdateAll").addEventListener("click", async () => {
     const mode = document.querySelector("input[name='updateScope']:checked")?.value || "limited";
     const count = Number($("updateTopicCount").value || 8);
+    logControl("update+forecast all confirmed", { mode, count });
     closeUpdateDialog();
     await runUpdate("all", { updateAll: mode === "all", maxTopics: count });
   });
@@ -1297,10 +1546,15 @@ function restorePanelOrder() {
 async function runUpdate(scope, options = {}) {
   if (app.updating) return;
   app.updating = true;
+  logControl("update+forecast started", {
+    scope,
+    options,
+    beforeForecasts: app.state.selected_event?.edge_count || 0,
+  });
   const labels = {
-    topic: "Updating topic...",
-    tracked: "Updating tracked...",
-    all: options.updateAll ? "Updating all..." : `Updating ${options.maxTopics || 8}...`,
+    topic: "Forecasting topic...",
+    tracked: "Forecasting tracked...",
+    all: options.updateAll ? "Forecasting all..." : `Forecasting ${options.maxTopics || 8}...`,
   };
   setUpdateButtons(true, labels[scope] || "Updating...");
   try {
@@ -1314,6 +1568,11 @@ async function runUpdate(scope, options = {}) {
     } else {
       await post("/api/update-current", { condition_id: app.selectedMarketId });
     }
+    logControl("update+forecast finished", {
+      scope,
+      afterForecasts: app.state.selected_event?.edge_count || 0,
+      direction: app.state.selected_event?.forecast_direction || "observe",
+    });
   } finally {
     app.updating = false;
     setUpdateButtons(false, "");
@@ -1324,9 +1583,9 @@ function setUpdateButtons(disabled, label) {
   $("updateCurrentBtn").disabled = disabled;
   $("updateTrackedBtn").disabled = disabled;
   $("updateAllBtn").disabled = disabled;
-  $("updateCurrentBtn").textContent = disabled ? label : "Update topic";
-  $("updateTrackedBtn").textContent = disabled ? "Please wait" : "Update tracked";
-  $("updateAllBtn").textContent = disabled ? "Please wait" : "Update all";
+  $("updateCurrentBtn").textContent = disabled ? label : "Update + forecast topic";
+  $("updateTrackedBtn").textContent = disabled ? "Please wait" : "Update + forecast tracked";
+  $("updateAllBtn").textContent = disabled ? "Please wait" : "Update + forecast all";
 }
 
 function openUpdateDialog() {
@@ -1347,6 +1606,52 @@ function updateDialogState() {
   if (mode === "all") {
     countInput.value = (app.state.events || []).length || countInput.value;
   }
+}
+
+async function runMaintainerAction(action) {
+  if (app.maintainerRunning) return;
+  app.maintainerRunning = true;
+  logControl("maintainer action started", {
+    action,
+    dryRun: $("maintainerDryRun").checked,
+  });
+  setMaintainerButtons(true, action);
+  app.maintainerPoll = window.setInterval(() => {
+    loadState().catch(() => {});
+  }, 1500);
+  try {
+    await post("/api/maintainer-action", {
+      action,
+      dry_run: $("maintainerDryRun").checked,
+    });
+    const maintainer = app.state.account_context?.maintainer || {};
+    logControl("maintainer action finished", {
+      action,
+      lastSold: maintainer.summary?.last_sold || 0,
+      lastBuys: maintainer.summary?.last_buys || 0,
+      consoleRows: maintainer.console_logs?.length || 0,
+    });
+  } finally {
+    if (app.maintainerPoll) {
+      window.clearInterval(app.maintainerPoll);
+      app.maintainerPoll = null;
+    }
+    app.maintainerRunning = false;
+    setMaintainerButtons(false, "");
+    loadState().catch(() => {});
+  }
+}
+
+function setMaintainerButtons(disabled, action) {
+  [
+    "maintainerUpdateBtn",
+    "maintainerSellBtn",
+    "maintainerBuyBtn",
+    "maintainerRunBtn",
+  ].forEach((id) => {
+    $(id).disabled = disabled;
+  });
+  $("maintainerStatusPill").textContent = disabled ? `${action}...` : "ready";
 }
 
 function applyTheme(theme) {

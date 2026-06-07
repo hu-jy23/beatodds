@@ -14,9 +14,9 @@
         <h2 id="selectedTitle">Loading markets</h2>
       </div>
       <div class="top-actions">
-        <button class="btn" id="updateCurrentBtn">Update topic</button>
-        <button class="btn" id="updateTrackedBtn">Update tracked</button>
-        <button class="btn" id="updateAllBtn">Update all</button>
+        <button class="btn" id="updateCurrentBtn">Update + forecast topic</button>
+        <button class="btn" id="updateTrackedBtn">Update + forecast tracked</button>
+        <button class="btn" id="updateAllBtn">Update + forecast all</button>
         <button class="btn secondary" id="marketsPageBtn">Markets</button>
         <button class="btn secondary" id="userPageBtn">User</button>
         <button class="btn secondary" id="themeToggle">Dark</button>
@@ -263,6 +263,7 @@
           <button class="user-nav-btn" data-user-section="profile">基础设置</button>
           <button class="user-nav-btn" data-user-section="funds">资金管理</button>
           <button class="user-nav-btn" data-user-section="positions">持仓与交易</button>
+          <button class="user-nav-btn" data-user-section="maintainer">Maintainer</button>
           <button class="user-nav-btn" data-user-section="agent">Agent Pattern</button>
         </nav>
         <div class="account-switcher">
@@ -304,6 +305,13 @@
               <div class="transaction-list" id="transactionList"></div>
             </section>
           </div>
+          <section class="detail-block user-block">
+            <div class="panel-head tight">
+              <h3>Maintainer Console</h3>
+              <span id="overviewMaintainerConsoleStatus">sell / purchase / maintain</span>
+            </div>
+            <div class="maintainer-console" id="overviewMaintainerConsole"></div>
+          </section>
         </section>
 
         <section class="user-section hidden" id="userProfileSection">
@@ -363,6 +371,14 @@
         </section>
 
         <section class="user-section hidden" id="userPositionsSection">
+          <div class="user-section-toolbar">
+            <div>
+              <p class="eyebrow">Account Ledger</p>
+              <h2>持仓与交易</h2>
+            </div>
+            <button class="btn secondary" id="refreshPositionsBtn">Refresh positions</button>
+          </div>
+          <div class="account-money-strip" id="accountMoneyStrip"></div>
           <div class="user-grid two">
             <section class="detail-block user-block">
               <div class="panel-head tight">
@@ -379,6 +395,65 @@
               <div class="trade-list" id="tradeList"></div>
             </section>
           </div>
+        </section>
+
+        <section class="user-section hidden" id="userMaintainerSection">
+          <div class="user-hero">
+            <div>
+              <p class="eyebrow">Paper Maintainer</p>
+              <h2>Strategy Control</h2>
+            </div>
+            <div class="pill" id="maintainerStatusPill">idle</div>
+          </div>
+          <div class="user-grid two">
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>Earning Curve</h3>
+                <span id="earningStatus">cash + open cost basis</span>
+              </div>
+              <canvas id="earningCurveChart" width="720" height="240"></canvas>
+              <div class="mini-stats maintainer-actions">
+                <button class="btn secondary" id="maintainerUpdateBtn">Manual update</button>
+                <button class="btn danger" id="maintainerSellBtn">Sell</button>
+                <button class="btn primary" id="maintainerBuyBtn">Purchase</button>
+                <button class="btn primary" id="maintainerRunBtn">Maintain</button>
+              </div>
+              <label class="check-row">
+                <input id="maintainerDryRun" type="checkbox" checked />
+                <span>Dry run</span>
+              </label>
+            </section>
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>Strategy</h3>
+                <span id="strategyStatus">latest run</span>
+              </div>
+              <div class="strategy-grid" id="strategyGrid"></div>
+            </section>
+          </div>
+          <div class="user-grid two">
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>Current Share Hold</h3>
+                <span id="maintainerPositionStatus">formal ledger</span>
+              </div>
+              <div class="position-list" id="maintainerPositionList"></div>
+            </section>
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>Strategy Decisions</h3>
+                <span id="maintainerDecisionStatus">jsonl log</span>
+              </div>
+              <div class="trade-list" id="maintainerDecisionList"></div>
+            </section>
+          </div>
+          <section class="detail-block user-block">
+            <div class="panel-head tight">
+              <h3>Maintainer Console</h3>
+              <span id="maintainerConsoleStatus">latest command output</span>
+            </div>
+            <div class="maintainer-console" id="maintainerConsole"></div>
+          </section>
         </section>
 
         <section class="user-section hidden" id="userAgentSection">

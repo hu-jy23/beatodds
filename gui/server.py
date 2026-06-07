@@ -6,6 +6,8 @@ import argparse
 import json
 import mimetypes
 import re
+import subprocess
+import sys
 import threading
 import webbrowser
 from dataclasses import asdict, dataclass
@@ -28,6 +30,8 @@ from beatodds.evaluation.paper_store import (
     load_account_transactions,
     load_paper_account,
     load_paper_accounts,
+    load_paper_orders,
+    load_paper_positions,
     update_account_profile,
     update_risk_params,
     withdraw_cash,
@@ -104,7 +108,7 @@ class GuiStore:
                 "payload": payload or {},
             },
         )
-        state.actions = state.actions[:80]
+        state.actions = state.actions[:600]
         self.save(state)
 
 
@@ -298,6 +302,8 @@ class GuiData:
             "position_event_groups": activity["position_event_groups"],
             "trade_records": activity["trade_records"],
             "trade_event_groups": activity["trade_event_groups"],
+            "earning_points": activity["earning_points"],
+            "maintainer": self.maintainer_context(account.account_id),
             "user_stats": activity["user_stats"],
         }
 
@@ -387,75 +393,213 @@ class GuiData:
             deposit_cash(account.account_id, amount, memo=memo)
         return self.state_payload()
 
-    def _account_activity(self, account_id: str) -> dict:
+    def maintainer_context(self, account_id: str) -> dict:
         state = self.store.load()
+        log_rows = _read_strategy_log(self.cfg.data_dir / "paper_strategy_runs.jsonl", account_id)
+        recent = log_rows[:40]
+        latest_start = next((row for row in recent if row.get("type") == "strategy_run_start"), {})
+        latest_end = next((row for row in recent if row.get("type") == "strategy_run_end"), {})
+        decisions = [row for row in recent if row.get("type") == "strategy_decision"]
+        action_logs = [
+            action for action in state.actions
+            if action.get("kind") in {
+                "maintainer_action",
+                "maintainer_log",
+                "maintainer_start",
+                "maintainer_timeout",
+            }
+            and (action.get("payload") or {}).get("account_id") == account_id
+        ][:300]
+        params = latest_start.get("params") or {}
+        summary = {
+            "last_run_id": latest_start.get("run_id") or latest_end.get("run_id") or "",
+            "last_started_at": latest_start.get("created_at") or "",
+            "last_finished_at": latest_end.get("created_at") or "",
+            "last_sold": int(latest_end.get("sold") or 0),
+            "last_buys": int(latest_end.get("buys") or 0),
+            "last_cash_earned": float(latest_end.get("cash_earned") or 0),
+            "last_realized_pnl": float(latest_end.get("realized_pnl") or 0),
+            "decision_count": len(decisions),
+        }
+        return {
+            "summary": summary,
+            "params": params,
+            "recent_decisions": decisions[:18],
+            "console_logs": _maintainer_console_logs(action_logs, recent),
+            "log_path": str(self.cfg.data_dir / "paper_strategy_runs.jsonl"),
+        }
+
+    def run_maintainer_action(self, payload: dict) -> dict:
+        state = self.store.load()
+        account = self._selected_account(state)
+        action = str(payload.get("action") or "update")
+        dry_run = bool(payload.get("dry_run", False))
+        if action == "update":
+            return self.state_payload()
+        if action not in {"sell", "purchase", "maintain"}:
+            raise ValueError("action must be update, sell, purchase, or maintain")
+        cmd = [
+            sys.executable,
+            "-u",
+            str(ROOT / "scripts" / "run_paper_maintainer.py"),
+            "--account-id",
+            account.account_id,
+        ]
+        if action == "sell":
+            cmd.append("--sell-only")
+        elif action == "purchase":
+            cmd.append("--buy-only")
+        if dry_run:
+            cmd.append("--dry-run")
+        started = datetime.now(timezone.utc)
+        self.store.append_action(
+            "maintainer_start",
+            "",
+            {
+                "account_id": account.account_id,
+                "action": action,
+                "dry_run": dry_run,
+                "started_at": started.isoformat(),
+                "command": " ".join(cmd),
+            },
+        )
+        output_lines: list[str] = []
+        try:
+            process = subprocess.Popen(
+                cmd,
+                cwd=str(ROOT),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+            )
+            assert process.stdout is not None
+            for line in process.stdout:
+                clean = line.rstrip()
+                if not clean:
+                    continue
+                output_lines.append(clean)
+                self.store.append_action(
+                    "maintainer_log",
+                    "",
+                    {
+                        "account_id": account.account_id,
+                        "action": action,
+                        "dry_run": dry_run,
+                        "started_at": started.isoformat(),
+                        "line": clean,
+                    },
+                )
+            returncode = process.wait(timeout=900)
+        except subprocess.TimeoutExpired as exc:
+            self.store.append_action(
+                "maintainer_timeout",
+                "",
+                {"account_id": account.account_id, "action": action, "timeout": exc.timeout},
+            )
+            raise RuntimeError("maintainer action timed out") from exc
+        self.store.append_action(
+            "maintainer_action",
+            "",
+            {
+                "account_id": account.account_id,
+                "action": action,
+                "dry_run": dry_run,
+                "returncode": returncode,
+                "started_at": started.isoformat(),
+                "stdout": "\n".join(output_lines),
+                "stderr": "",
+            },
+        )
+        if returncode != 0:
+            message = "\n".join(output_lines).strip() or "maintainer failed"
+            raise RuntimeError(message)
+        return self.state_payload()
+
+    def _account_activity(self, account_id: str) -> dict:
+        account = load_paper_account(account_id)
         transactions = [
             _paper_transaction_dict(item)
             for item in load_account_transactions(account_id, limit=80)
         ]
+        orders = load_paper_orders(account_id, limit=120)
+        projected_by_position: dict[tuple[str, str], float] = {}
+        for order in orders:
+            if order.action != "buy" or not order.net_edge:
+                continue
+            key = (order.condition_id, order.side)
+            projected_by_position[key] = (
+                projected_by_position.get(key, 0.0)
+                + order.filled_shares * order.net_edge
+            )
+        positions = [
+            _paper_position_dict(
+                item,
+                projected_by_position.get((item.condition_id, item.side)),
+            )
+            for item in load_paper_positions(account_id)
+        ]
+        trade_records = [
+            _paper_order_dict(item)
+            for item in orders
+        ]
+        open_cost = sum(float(item.get("notional") or 0) for item in positions)
+        initial_cash = float(account.initial_cash if account else 0)
         nav_points = [
             {
                 "at": item["created_at"],
-                "nav": round(item["cash_after"] + item["reserved_after"], 8),
+                "nav": round(item["cash_after"] + item["reserved_after"] + open_cost, 8),
+                "pnl": round(
+                    item["cash_after"] + item["reserved_after"] + open_cost - initial_cash,
+                    8,
+                ),
             }
             for item in reversed(transactions)
         ]
-        deals = [
-            item for item in state.deals
-            if item.get("account_id") in {account_id, None, ""}
-        ]
-        trade_records = [
-            self._enrich_trade_record(item)
-            for item in sorted(
-                deals,
-                key=lambda item: item.get("at") or "",
-                reverse=True,
-            )[:80]
-        ]
-        positions_by_key: dict[tuple[str, str, str], dict] = {}
-        for deal in trade_records:
-            key = (
-                deal.get("event_id") or deal.get("condition_id") or "",
-                deal.get("condition_id") or "",
-                deal.get("side") or "YES",
-            )
-            if not key[1]:
-                continue
-            row = positions_by_key.setdefault(
-                key,
-                {
-                    "event_id": key[0],
-                    "event_title": deal.get("event_title") or deal.get("question") or "",
-                    "condition_id": key[1],
-                    "side": key[2],
-                    "question": deal.get("question") or "",
-                    "shares": 0.0,
-                    "notional": 0.0,
-                    "estimated_pnl": 0.0,
-                    "trade_count": 0,
-                },
-            )
-            row["shares"] += float(deal.get("size") or 0)
-            row["notional"] += float(deal.get("notional") or 0)
-            row["estimated_pnl"] += float(deal.get("estimated_pnl") or 0)
-            row["trade_count"] += 1
-        positions = sorted(
-            positions_by_key.values(),
-            key=lambda item: (item["event_title"], -abs(item["notional"])),
-        )
+        earning_points = nav_points
         event_position_groups = _event_groups(positions)
         event_trade_groups = _event_groups(trade_records)
-        estimated_pnl = sum(float(item.get("estimated_pnl") or 0) for item in trade_records)
+        projected_open_pnl = sum(
+            float(item.get("estimated_pnl") or 0)
+            for item in positions
+            if item.get("estimated_pnl") is not None
+        )
+        share_hold_cost = open_cost
+        projected_share_value = share_hold_cost + projected_open_pnl
+        cash_balance = float(account.cash_balance if account else 0)
+        reserved_cash = float(account.reserved_cash if account else 0)
+        total_account_money = cash_balance + reserved_cash + projected_share_value
+        total_earn_loss = total_account_money - initial_cash
+        realized_pnl = sum(
+            float(item.get("cash_delta") or 0)
+            for item in transactions
+            if item.get("transaction_type") == "trade" and float(item.get("cash_delta") or 0) > 0
+        )
+        latest_nav = (
+            nav_points[-1]["nav"]
+            if nav_points else
+            (account.cash_balance if account else 0.0)
+        )
         user_stats = {
             "trade_count": len(trade_records),
             "position_count": len(positions),
-            "estimated_pnl": round(estimated_pnl, 8),
+            "estimated_pnl": round(projected_open_pnl, 8),
+            "realized_pnl": round(realized_pnl, 8),
+            "open_cost_basis": round(open_cost, 8),
+            "cash_balance": round(cash_balance, 8),
+            "reserved_cash": round(reserved_cash, 8),
+            "share_hold_cost": round(share_hold_cost, 8),
+            "projected_share_value": round(projected_share_value, 8),
+            "total_account_money": round(total_account_money, 8),
+            "total_earn_loss": round(total_earn_loss, 8),
+            "initial_cash": round(initial_cash, 8),
             "transaction_count": len(transactions),
-            "latest_nav": nav_points[-1]["nav"] if nav_points else 0.0,
+            "latest_nav": latest_nav,
         }
         return {
             "transactions": transactions,
             "nav_points": nav_points,
+            "earning_points": earning_points,
             "positions": positions,
             "position_event_groups": event_position_groups,
             "trade_records": trade_records,
@@ -568,9 +712,11 @@ class GuiData:
         meta = self._event_meta()
         state = self.store.load()
         tracked = set(state.tracked_ids)
+        forecast_by_market = self._latest_forecast_by_market()
         grouped: dict[str, dict] = {}
         for market in markets:
             event_id = market["event_id"] or market["condition_id"]
+            forecast = forecast_by_market.get(market["condition_id"])
             event_meta = meta.get(event_id, {})
             event = grouped.setdefault(
                 event_id,
@@ -591,8 +737,15 @@ class GuiData:
                     "market_count": 0,
                     "neg_risk_count": 0,
                     "tracked_count": 0,
+                    "edge_count": 0,
+                    "max_abs_edge": 0.0,
+                    "avg_abs_edge": 0.0,
+                    "forecast_direction": "observe",
+                    "forecast_edge": 0.0,
+                    "forecast_confidence": 0.0,
                     "active": True,
                     "markets": [],
+                    "_abs_edge_sum": 0.0,
                 },
             )
             event["markets"].append(market)
@@ -602,14 +755,26 @@ class GuiData:
             event["neg_risk_count"] += 1 if market["neg_risk"] else 0
             event["tracked_count"] += 1 if market["condition_id"] in tracked else 0
             event["active"] = event["active"] and market["active"]
+            if forecast:
+                abs_edge = abs(forecast["edge"])
+                event["edge_count"] += 1
+                event["_abs_edge_sum"] += abs_edge
+                if abs_edge >= event["max_abs_edge"]:
+                    event["max_abs_edge"] = abs_edge
+                    event["forecast_direction"] = forecast["forecast_direction"]
+                    event["forecast_edge"] = forecast["edge"]
+                    event["forecast_confidence"] = forecast["confidence"]
 
         for event in grouped.values():
             if not event["volume_24h"]:
                 event["volume_24h"] = event["market_volume_24h"]
             if not event["liquidity"]:
                 event["liquidity"] = event["market_liquidity"]
+            if event["edge_count"]:
+                event["avg_abs_edge"] = event["_abs_edge_sum"] / event["edge_count"]
             event["top_markets"] = event["markets"][:4]
             event.pop("markets")
+            event.pop("_abs_edge_sum", None)
         return sorted(
             grouped.values(),
             key=lambda item: item["volume_24h"],
@@ -632,7 +797,7 @@ class GuiData:
         if event is None:
             return None
 
-        edge_by_market = {item["condition_id"]: item for item in self._forecast_edges()}
+        edge_by_market = self._latest_forecast_by_market()
         enriched_markets = []
         for market in event_markets:
             forecast_edge = edge_by_market.get(market["condition_id"])
@@ -643,10 +808,16 @@ class GuiData:
                     "edge": forecast_edge["edge"],
                     "confidence": forecast_edge["confidence"],
                     "forecast_snapshot_time": forecast_edge["snapshot_time"],
+                    "forecast_direction": forecast_edge["forecast_direction"],
                 })
             enriched_markets.append(enriched)
 
         edges = [m["edge"] for m in enriched_markets if "edge" in m]
+        dominant = max(
+            (m for m in enriched_markets if "edge" in m),
+            key=lambda item: abs(item["edge"]),
+            default=None,
+        )
         primary_market = enriched_markets[0] if enriched_markets else {}
         rules = primary_market.get("resolution_text") or primary_market.get("description") or ""
         background = event.get("description") or primary_market.get("description") or ""
@@ -659,6 +830,14 @@ class GuiData:
             "edge_count": len(edges),
             "max_abs_edge": max((abs(edge) for edge in edges), default=0.0),
             "avg_abs_edge": sum(abs(edge) for edge in edges) / len(edges) if edges else 0.0,
+            "forecast_direction": (
+                dominant.get("forecast_direction")
+                if dominant else event.get("forecast_direction", "observe")
+            ),
+            "forecast_edge": dominant.get("edge") if dominant else event.get("forecast_edge", 0.0),
+            "forecast_confidence": (
+                dominant.get("confidence") if dominant else event.get("forecast_confidence", 0.0)
+            ),
         }
 
     def market_detail(
@@ -967,10 +1146,8 @@ class GuiData:
             "snapshot_available": snapshot_status["available"],
             "snapshot_reason": snapshot_status["reason"],
             "forecast_saved": False,
+            "forecast_snapshot_source": "live" if snapshot is not None else "fallback",
         }
-        if snapshot is None:
-            result["forecast_reason"] = "Skipped forecast because no live price is available."
-            return result
         forecast = self._forecaster_client().forecast(candidate, evidence, frozen_at)
         save_forecast_run(
             candidate=candidate,
@@ -985,6 +1162,18 @@ class GuiData:
             "p_f": forecast.p_f,
             "confidence": forecast.confidence,
         })
+        event_id = market.get("event_id") or market["condition_id"]
+        event = self.event_detail(event_id)
+        if event:
+            result.update({
+                "event_edge_count": event.get("edge_count", 0),
+                "event_forecast_direction": event.get("forecast_direction", "observe"),
+            })
+        if snapshot is None:
+            result["forecast_reason"] = (
+                "Forecast used stored market price fallback because no live CLOB "
+                "snapshot was available."
+            )
         return result
 
     def clear_topic(self, condition_id: str) -> dict:
@@ -1171,13 +1360,14 @@ class GuiData:
 
     def _fallback_snapshot(self, market: dict) -> PriceSnapshot:
         token_id = market.get("token_yes_id") or market.get("token_no_id") or ""
+        midpoint = _stored_yes_price(market)
         return PriceSnapshot(
             condition_id=market["condition_id"],
             token_id=token_id,
             snapshot_time=datetime.now(timezone.utc),
-            midpoint=0.5,
-            best_bid=0.5,
-            best_ask=0.5,
+            midpoint=midpoint,
+            best_bid=midpoint,
+            best_ask=midpoint,
             spread=0.0,
             volume_24h=float(market.get("volume_24h") or 0),
             source="triggered",
@@ -1394,6 +1584,53 @@ class GuiData:
             for row in rows
         ]
 
+    def _latest_forecast_by_market(self) -> dict[str, dict]:
+        if not self.eval_db.exists():
+            return {}
+        try:
+            with duckdb.connect(str(self.eval_db), read_only=True) as conn:
+                tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+                if "forecast_runs" not in tables:
+                    return {}
+                columns = {
+                    row[1]
+                    for row in conn.execute("PRAGMA table_info('forecast_runs')").fetchall()
+                }
+                direction_expr = (
+                    "forecast_direction"
+                    if "forecast_direction" in columns else "'observe'"
+                )
+                rows = conn.execute(
+                    f"""
+                    SELECT condition_id, p_m, p_f, edge, confidence, snapshot_time,
+                           forecast_direction
+                    FROM (
+                        SELECT condition_id, p_m, p_f, edge, confidence, snapshot_time,
+                               {direction_expr} AS forecast_direction,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY condition_id
+                                   ORDER BY snapshot_time DESC
+                               ) AS rn
+                        FROM forecast_runs
+                    )
+                    WHERE rn = 1
+                    """
+                ).fetchall()
+        except Exception:
+            return {}
+        return {
+            str(row[0]): {
+                "condition_id": row[0],
+                "p_m": float(row[1] or 0),
+                "p_f": float(row[2] or 0),
+                "edge": float(row[3] or 0),
+                "confidence": float(row[4] or 0),
+                "snapshot_time": _iso(row[5]),
+                "forecast_direction": row[6] or "observe",
+            }
+            for row in rows
+        }
+
     def _chart_points(
         self,
         condition_id: str,
@@ -1522,12 +1759,15 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/market/"):
             condition_id = unquote(parsed.path.removeprefix("/api/market/"))
             side = parse_qs(parsed.query).get("side", [None])[0]
+            selected = self.data.market_detail(
+                condition_id,
+                include_live=True,
+                side=side,
+            )
+            event_id = (selected or {}).get("market", {}).get("event_id")
             return self._json({
-                "selected": self.data.market_detail(
-                    condition_id,
-                    include_live=True,
-                    side=side,
-                ),
+                "selected": selected,
+                "selected_event": self.data.event_detail(event_id) if event_id else None,
             })
         if parsed.path.startswith("/assets/"):
             return self._file(parsed.path.removeprefix("/assets/"))
@@ -1553,6 +1793,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.data.update_account_profile(payload))
         if parsed.path == "/api/account-funds":
             return self._json(self.data.account_funds(payload))
+        if parsed.path == "/api/maintainer-action":
+            return self._json(self.data.run_maintainer_action(payload))
         if parsed.path == "/api/select":
             return self._json(self.data.select(condition_id))
         if parsed.path == "/api/track":
@@ -1634,6 +1876,17 @@ def _side_probability(yes_probability: float, side: str) -> float:
     return 1 - probability if _side(side) == "NO" else probability
 
 
+def _stored_yes_price(market: dict) -> float:
+    prices = market.get("outcome_prices") or []
+    if prices:
+        try:
+            value = float(prices[0])
+            return max(0.001, min(0.999, value))
+        except (TypeError, ValueError):
+            pass
+    return 0.5
+
+
 def _paper_account_dict(account) -> dict:
     data = account.model_dump(mode="json")
     data["available_cash"] = round(
@@ -1651,6 +1904,178 @@ def _paper_transaction_dict(transaction) -> dict:
     return transaction.model_dump(mode="json")
 
 
+def _paper_position_dict(position, projected_pnl: float | None = None) -> dict:
+    return {
+        "event_id": position.event_id or position.condition_id,
+        "event_title": position.question or position.condition_id,
+        "event_category": position.category or "",
+        "condition_id": position.condition_id,
+        "token_id": position.token_id,
+        "side": position.side,
+        "question": position.question,
+        "shares": position.shares,
+        "notional": round(position.cost_basis + position.fees_paid, 8),
+        "avg_price": position.avg_price,
+        "fees_paid": position.fees_paid,
+        "estimated_pnl": projected_pnl,
+        "pnl_label": "projected edge PnL" if projected_pnl is not None else "unmarked",
+        "trade_count": 1,
+        "opened_at": _iso(position.opened_at),
+        "updated_at": _iso(position.updated_at),
+    }
+
+
+def _paper_order_dict(order) -> dict:
+    estimated_pnl = None
+    pnl_label = "unmarked"
+    if order.action == "buy" and order.net_edge:
+        estimated_pnl = order.filled_shares * order.net_edge
+        pnl_label = "projected edge PnL"
+    return {
+        "event_id": order.event_id or order.condition_id,
+        "event_title": order.question or order.condition_id,
+        "event_category": order.category or "",
+        "condition_id": order.condition_id,
+        "question": order.question,
+        "side": order.side,
+        "action": order.action,
+        "status": order.status,
+        "shares": order.filled_shares,
+        "size": order.filled_shares,
+        "notional": order.filled_notional,
+        "avg_price": order.avg_price,
+        "fee": order.fee,
+        "estimated_pnl": estimated_pnl,
+        "pnl_label": pnl_label,
+        "trade_count": 1,
+        "at": _iso(order.created_at),
+        "created_at": _iso(order.created_at),
+        "gross_edge": order.gross_edge,
+        "net_edge": order.net_edge,
+        "confidence": order.confidence,
+        "reason": order.decision_reason,
+    }
+
+
+def _read_strategy_log(path: Path, account_id: str, limit: int = 160) -> list[dict]:
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("account_id") == account_id:
+                    rows.append(row)
+    except OSError:
+        return []
+    rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return rows[:limit]
+
+
+def _maintainer_console_logs(actions: list[dict], strategy_rows: list[dict]) -> list[dict]:
+    logs: list[dict] = []
+    for action in actions:
+        payload = action.get("payload") or {}
+        if action.get("kind") == "maintainer_log":
+            line = str(payload.get("line") or "")
+            logs.append({
+                "at": action.get("at") or payload.get("started_at") or "",
+                "kind": payload.get("action") or "maintainer",
+                "status": "cli",
+                "summary": line,
+                "detail": line,
+            })
+            continue
+        if action.get("kind") == "maintainer_start":
+            logs.append({
+                "at": action.get("at") or payload.get("started_at") or "",
+                "kind": payload.get("action") or "maintainer",
+                "status": "start",
+                "summary": str(payload.get("command") or "maintainer command started"),
+                "detail": str(payload.get("command") or ""),
+            })
+            continue
+        stdout = str(payload.get("stdout") or "").strip()
+        stderr = str(payload.get("stderr") or "").strip()
+        summary = stdout.splitlines()[-1] if stdout else stderr[-160:]
+        logs.append({
+            "at": action.get("at") or payload.get("started_at") or "",
+            "kind": payload.get("action") or "maintainer",
+            "status": "ok" if int(payload.get("returncode") or 0) == 0 else "error",
+            "summary": summary,
+            "detail": summary,
+        })
+    for row in strategy_rows[:120]:
+        row_type = row.get("type") or "strategy"
+        if row_type == "strategy_run_start":
+            money = row.get("money") or {}
+            summary = (
+                f"PAPER MAINTAINER RUN {row.get('run_id') or ''} "
+                f"cash=${float(money.get('cash_balance') or 0):.2f} "
+                f"open_cost=${float(money.get('open_cost_basis') or 0):.2f}"
+            )
+            logs.append({
+                "at": row.get("created_at") or "",
+                "kind": "maintainer",
+                "status": "start",
+                "summary": summary,
+                "detail": summary,
+            })
+            continue
+        if row_type == "strategy_run_end":
+            money = row.get("money") or {}
+            summary = (
+                f"done. sold={int(row.get('sold') or 0)} buys={int(row.get('buys') or 0)} "
+                f"cash=${float(money.get('cash_balance') or 0):.2f} "
+                f"open_cost=${float(money.get('open_cost_basis') or 0):.2f} "
+                f"positions={int(money.get('open_position_count') or 0)}"
+            )
+            logs.append({
+                "at": row.get("created_at") or "",
+                "kind": "maintainer",
+                "status": "ok",
+                "summary": summary,
+                "detail": summary,
+            })
+            continue
+        if row_type != "strategy_decision":
+            continue
+        phase = row.get("phase") or "strategy"
+        action = row.get("action") or "decision"
+        condition_id = str(row.get("condition_id") or "")
+        question = str(row.get("question") or condition_id)
+        extras = []
+        if row.get("side"):
+            extras.append(str(row.get("side")))
+        if row.get("gross_edge") is not None:
+            extras.append(f"edge={float(row.get('gross_edge') or 0):+.3f}")
+        if row.get("confidence") is not None:
+            extras.append(f"confidence={float(row.get('confidence') or 0):.2f}")
+        if row.get("requested_notional") is not None:
+            extras.append(f"notional=${float(row.get('requested_notional') or 0):.2f}")
+        suffix = f" ({', '.join(extras)})" if extras else ""
+        summary = (
+            f"{phase}: {action} {condition_id[:12]} {question[:90]}"
+            f"{suffix} - {row.get('reason') or row.get('error') or ''}"
+        )
+        logs.append({
+            "at": row.get("created_at") or "",
+            "kind": phase,
+            "status": action,
+            "summary": summary,
+            "detail": summary,
+        })
+    logs.sort(key=lambda item: str(item.get("at") or ""))
+    return logs[-260:]
+
+
 def _event_groups(rows: list[dict]) -> list[dict]:
     grouped: dict[str, dict] = {}
     for row in rows:
@@ -1665,7 +2090,9 @@ def _event_groups(rows: list[dict]) -> list[dict]:
                 "trade_count": 0,
                 "shares": 0.0,
                 "notional": 0.0,
-                "estimated_pnl": 0.0,
+                "estimated_pnl": None,
+                "_estimated_pnl_sum": 0.0,
+                "_estimated_pnl_count": 0,
                 "rows": [],
             },
         )
@@ -1674,7 +2101,14 @@ def _event_groups(rows: list[dict]) -> list[dict]:
         group["trade_count"] += int(row.get("trade_count") or 1)
         group["shares"] += float(row.get("shares") or row.get("size") or 0)
         group["notional"] += float(row.get("notional") or 0)
-        group["estimated_pnl"] += float(row.get("estimated_pnl") or 0)
+        if row.get("estimated_pnl") is not None:
+            group["_estimated_pnl_sum"] += float(row.get("estimated_pnl") or 0)
+            group["_estimated_pnl_count"] += 1
+    for group in grouped.values():
+        if group["_estimated_pnl_count"]:
+            group["estimated_pnl"] = group["_estimated_pnl_sum"]
+        group.pop("_estimated_pnl_sum", None)
+        group.pop("_estimated_pnl_count", None)
     return sorted(grouped.values(), key=lambda item: item["event_title"])
 
 

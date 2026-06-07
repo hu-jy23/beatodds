@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -76,6 +77,38 @@ def _append_decision_log(args, row: dict) -> None:
     append_jsonl(args.decision_log_path, row)
 
 
+def _print_strategy_decision(row: dict) -> None:
+    phase = str(row.get("phase") or "strategy")
+    action = str(row.get("action") or "decision")
+    condition = str(row.get("condition_id") or "")
+    question = str(row.get("question") or condition)
+    reason = str(row.get("reason") or row.get("error") or "")
+    side = str(row.get("side") or "")
+    edge = row.get("gross_edge")
+    confidence = row.get("confidence")
+    extras: list[str] = []
+    if side:
+        extras.append(side)
+    if edge is not None:
+        extras.append(f"edge={float(edge):+.3f}")
+    if confidence is not None:
+        extras.append(f"confidence={float(confidence):.2f}")
+    if row.get("requested_notional") is not None:
+        extras.append(f"notional=${float(row['requested_notional']):.2f}")
+    if row.get("topic_exposure_before") is not None:
+        extras.append(
+            "topic_exposure="
+            f"${float(row['topic_exposure_before']):.2f}/${float(row['topic_exposure_limit']):.2f}"
+        )
+    suffix = f" ({', '.join(extras)})" if extras else ""
+    print(f"{phase}: {action} {condition[:12]} {question[:90]}{suffix} - {reason}", flush=True)
+
+
+def _record_strategy_decision(args, row: dict) -> None:
+    _print_strategy_decision(row)
+    append_jsonl(args.strategy_log_path, row)
+
+
 def _ensure_account(args) -> None:
     account = load_paper_account(args.account_id)
     if account is None:
@@ -144,26 +177,65 @@ def _side_choice(candidate: CandidateMarket, forecast, clob: ClobReadClient) -> 
     return {"status": "ok", **max(options, key=lambda item: item["gross_edge"])}
 
 
-def _sized_notional(candidate: CandidateMarket, args, account, edge: float) -> tuple[float, str]:
+def _cap_notional_for_fees(cap: float, fee_rate_bps: float) -> float:
+    if cap <= 0:
+        return cap
+    return cap / (1.0 + max(0.0, fee_rate_bps) / 10_000)
+
+
+def _sized_notional(
+    candidate: CandidateMarket,
+    args,
+    account,
+    edge: float,
+) -> tuple[float, str, dict[str, float]]:
     available_cash = max(0.0, account.cash_balance - account.min_cash_buffer)
     exposure = position_exposure(account.account_id)
+    market_key = f"market:{candidate.market.condition_id}"
+    event_key = f"event:{candidate.market.event_id}"
+    category_key = f"category:{candidate.market.category}"
+    market_exposure = exposure.get(market_key, 0.0)
+    event_exposure = exposure.get(event_key, 0.0)
+    category_exposure = exposure.get(category_key, 0.0)
+    total_exposure = exposure.get("total", 0.0)
     risk_fraction = min(
         args.max_order_fraction,
         max(args.min_order_fraction, abs(edge) * args.edge_size_multiplier),
     )
     target = account.cash_balance * risk_fraction
+    market_remaining = account.max_market_exposure - market_exposure
+    event_remaining = account.max_event_exposure - event_exposure
+    category_remaining = account.max_category_exposure - category_exposure
+    total_remaining = account.max_total_exposure - total_exposure
     caps = [
         account.max_order_notional,
-        available_cash,
-        account.max_market_exposure - exposure.get(f"market:{candidate.market.condition_id}", 0.0),
-        account.max_event_exposure - exposure.get(f"event:{candidate.market.event_id}", 0.0),
-        account.max_category_exposure - exposure.get(f"category:{candidate.market.category}", 0.0),
-        account.max_total_exposure - exposure.get("total", 0.0),
+        _cap_notional_for_fees(available_cash, args.fee_rate_bps),
+        _cap_notional_for_fees(market_remaining, args.fee_rate_bps),
+        _cap_notional_for_fees(event_remaining, args.fee_rate_bps),
+        _cap_notional_for_fees(category_remaining, args.fee_rate_bps),
+        _cap_notional_for_fees(total_remaining, args.fee_rate_bps),
     ]
     notional = min(target, *caps)
+    context = {
+        "topic_exposure_before": round(market_exposure, 8),
+        "topic_exposure_limit": round(account.max_market_exposure, 8),
+        "event_exposure_before": round(event_exposure, 8),
+        "event_exposure_limit": round(account.max_event_exposure, 8),
+        "category_exposure_before": round(category_exposure, 8),
+        "category_exposure_limit": round(account.max_category_exposure, 8),
+        "total_exposure_before": round(total_exposure, 8),
+        "total_exposure_limit": round(account.max_total_exposure, 8),
+    }
     if notional < args.min_order_notional:
-        return 0.0, f"size below minimum: ${notional:.2f}"
-    return round(notional, 2), "risk sizing accepted"
+        return 0.0, f"size below minimum after existing exposure: ${notional:.2f}", context
+    return (
+        math.floor(notional * 100) / 100,
+        (
+            "risk sizing accepted; existing topic exposure "
+            f"${market_exposure:.2f}/${account.max_market_exposure:.2f}"
+        ),
+        context,
+    )
 
 
 def _sell_phase(args, run_id: str, strategy_params: dict) -> tuple[int, float, float]:
@@ -198,7 +270,7 @@ def _sell_phase(args, run_id: str, strategy_params: dict) -> tuple[int, float, f
         }
         if mark is None or mark.status != "marked" or mark.current_bid is None:
             row.update({"action": "hold", "reason": "no current bid mark"})
-            append_jsonl(args.strategy_log_path, row)
+            _record_strategy_decision(args, row)
             continue
         shares_to_sell = round(position.shares * args.sell_fraction, 8)
         estimate = sell_estimate(
@@ -269,7 +341,7 @@ def _sell_phase(args, run_id: str, strategy_params: dict) -> tuple[int, float, f
             earned += estimate["net_proceeds"]
             realized_pnl += estimate["realized_pnl"]
         row["money_after"] = account_money_snapshot(args.account_id)
-        append_jsonl(args.strategy_log_path, row)
+        _record_strategy_decision(args, row)
     return sold, earned, realized_pnl
 
 
@@ -355,7 +427,7 @@ def _buy_phase(args, run_id: str, strategy_params: dict) -> tuple[int, list[Eval
             })
             if side["status"] != "ok":
                 row.update({"action": "skip_buy", "reason": side["reason"]})
-                append_jsonl(args.strategy_log_path, row)
+                _record_strategy_decision(args, row)
                 continue
             net_edge = side["gross_edge"] - args.fee_rate_bps / 10_000 - args.slippage_bps / 10_000
             row.update({
@@ -368,32 +440,42 @@ def _buy_phase(args, run_id: str, strategy_params: dict) -> tuple[int, list[Eval
             })
             if side["gross_edge"] < args.min_edge:
                 row.update({"action": "skip_buy", "reason": "edge below threshold"})
-                append_jsonl(args.strategy_log_path, row)
+                _record_strategy_decision(args, row)
                 continue
             if net_edge < args.min_net_edge:
                 row.update({"action": "skip_buy", "reason": "net edge below threshold"})
-                append_jsonl(args.strategy_log_path, row)
+                _record_strategy_decision(args, row)
                 continue
             if forecast.confidence < args.min_confidence:
                 row.update({"action": "skip_buy", "reason": "confidence below threshold"})
-                append_jsonl(args.strategy_log_path, row)
+                _record_strategy_decision(args, row)
                 continue
             account = load_paper_account(args.account_id)
             if account is None:
                 raise RuntimeError(f"paper account disappeared: {args.account_id}")
-            notional, size_reason = _sized_notional(candidate, args, account, side["gross_edge"])
+            notional, size_reason, exposure_context = _sized_notional(
+                candidate,
+                args,
+                account,
+                side["gross_edge"],
+            )
+            row.update(exposure_context)
             if notional <= 0:
                 row.update({"action": "skip_buy", "reason": size_reason})
-                append_jsonl(args.strategy_log_path, row)
+                _record_strategy_decision(args, row)
                 continue
             fills, filled_notional, _ = simulate_buy(side["levels"], notional)
             if filled_notional < args.min_order_notional or not fills:
                 row.update({"action": "skip_buy", "reason": "insufficient ask depth"})
-                append_jsonl(args.strategy_log_path, row)
+                _record_strategy_decision(args, row)
                 continue
             if args.dry_run:
-                row.update({"action": "buy_dry_run", "requested_notional": notional})
-                append_jsonl(args.strategy_log_path, row)
+                row.update({
+                    "action": "buy_dry_run",
+                    "reason": size_reason,
+                    "requested_notional": notional,
+                })
+                _record_strategy_decision(args, row)
                 continue
             order = record_paper_buy(
                 account_id=args.account_id,
@@ -418,6 +500,7 @@ def _buy_phase(args, run_id: str, strategy_params: dict) -> tuple[int, list[Eval
             )
             row.update({
                 "action": "buy",
+                "reason": size_reason,
                 "order_id": order.order_id,
                 "status": order.status,
                 "requested_notional": order.requested_notional,
@@ -460,7 +543,7 @@ def _buy_phase(args, run_id: str, strategy_params: dict) -> tuple[int, list[Eval
             row.update({"action": "error", "error": str(exc)})
             logger.exception(f"Maintainer buy decision failed for {candidate.market.condition_id}")
         row["money_after"] = account_money_snapshot(args.account_id)
-        append_jsonl(args.strategy_log_path, row)
+        _record_strategy_decision(args, row)
     return buys, eval_records
 
 

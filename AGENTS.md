@@ -176,6 +176,47 @@ As of 2026-05-25:
   defaults sell at current best bid when return is at least +8%, when
   `(current_bid - avg_entry_price) * confidence >= 0.02`, or when return is
   at or below -20%.
+  As of 2026-06-07, the GUI User page has a Maintainer section for the selected
+  paper account. It shows the formal ledger positions, earning curve,
+  maintainer strategy parameters, recent strategy JSONL decisions, and buttons
+  for Manual update, Sell, Purchase, and Maintain. The buttons call
+  `/api/maintainer-action`, which runs `run_paper_maintainer.py` for sell-only,
+  buy-only, or full sell-then-buy maintenance; the GUI dry-run checkbox defaults
+  on so manual testing does not mutate the ledger unless intentionally disabled.
+  Maintainer command output is streamed line-by-line into the User page
+  console while the subprocess runs, and maintainer buy decisions print compact
+  CLI lines for each considered topic. Maintainer sizing now caps new buy
+  notional against existing open topic exposure plus fees, so repeated runs
+  cannot push one market beyond `max_market_exposure`.
+  The User page maintainer console also falls back to recent
+  `paper_strategy_runs.jsonl` rows, so CLI-started maintainer runs appear in
+  the GUI as terminal-style logs. The Positions/Trades page no longer renders
+  missing PnL as `+0.00`; open positions and buy trades show projected edge PnL
+  when ledger edge data exists, otherwise they show `--` as unmarked.
+  GUI market top-bar update buttons now explicitly run update plus forecast:
+  topic, tracked, and all paths call `_refresh_market()` for the chosen markets.
+  `_refresh_market()` always attempts an LLM forecast after evidence retrieval;
+  it uses live CLOB snapshots when available and falls back to stored Gamma
+  outcome prices when live CLOB is unavailable, marking the result with
+  `forecast_snapshot_source`.
+  Event forecast badges are computed from the latest stored forecast per
+  market, not from the global top-edge chart slice, so events with lower-ranked
+  forecasts still show the correct forecast count. The left event list and
+  selected event badge display the dominant forecast direction (`tend yes`,
+  `tend no`, or `observe`) and color the event by that direction.
+  `/api/market/<condition_id>` returns both selected market detail and refreshed
+  selected event detail, and the frontend merges both so `edgePill` updates
+  after live-detail refreshes instead of staying on stale `0 forecasts`.
+  Browser console logs are emitted for common controls including event/market
+  selection, update+forecast topic/tracked/all, maintainer actions, account
+  config/funding/profile actions, tracking, and manual topic actions.
+  The User page `持仓与交易` section has a local Refresh positions button that
+  reuses the same `/api/state` refresh path as the global Refresh button. When
+  the global Refresh button is clicked while User > Positions is active, it
+  refreshes account positions/trades and keeps that section selected.
+  `持仓与交易` also displays an account money strip with cash, projected share
+  hold value, total money (`cash + reserved + shares`), and total earn/loss
+  versus the account's initial cash.
   Inspection entry point:
   `uv run scripts/run_paper_account.py --account-id paper-live-1000 --show --orders --positions --transactions`.
 - As of 2026-06-07, scanner market universe size is configurable. Gamma
@@ -595,6 +636,9 @@ Current state:
 - `run_paper_maintainer.py` can maintain a wise paper account by selling
   eligible open positions, buying new high-threshold opportunities, and logging
   strategy params plus money snapshots to `data/paper_strategy_runs.jsonl`.
+- GUI User > Maintainer visualizes the formal paper ledger, earning curve,
+  strategy params, and recent maintainer JSONL decisions, with manual update,
+  sell-only, buy-only, and full maintain controls.
 - Durable mark snapshots, final resolution PnL, and drawdown/hit-rate reporting
   still need to be added.
 
