@@ -10,6 +10,7 @@ from beatodds.evaluation.paper_store import (
     load_paper_orders,
     load_paper_positions,
     record_paper_buy,
+    record_paper_sell,
     release_reserved_cash,
     reserve_cash,
     update_risk_params,
@@ -217,5 +218,75 @@ def test_record_paper_buy_creates_order_transaction_and_position(tmp_path, monke
     assert len(positions) == 1
     assert positions[0].shares == 117.61904762
     assert positions[0].cost_basis == 50.0
+
+    config_module._settings = None
+
+
+def test_record_paper_sell_credits_cash_and_reduces_position(tmp_path, monkeypatch) -> None:
+    _reset_settings(tmp_path, monkeypatch)
+    create_paper_account(
+        account_id="seller",
+        name="Seller Test",
+        initial_cash=1_000.0,
+        max_order_notional=100.0,
+    )
+    record_paper_buy(
+        account_id="seller",
+        run_id="run-buy",
+        condition_id="cond-sell",
+        token_id="token-yes",
+        side="YES",
+        requested_notional=40.0,
+        fill_levels=[(0.4, 100.0)],
+        p_m_yes=0.4,
+        p_f_yes=0.5,
+        side_fair_prob=0.5,
+        gross_edge=0.1,
+        net_edge=0.1,
+        confidence=0.6,
+        fee_rate_bps=100.0,
+    )
+
+    sell = record_paper_sell(
+        account_id="seller",
+        run_id="run-sell",
+        condition_id="cond-sell",
+        token_id="token-yes",
+        side="YES",
+        shares=40.0,
+        price=0.5,
+        fee_rate_bps=100.0,
+        decision_reason="profit target",
+    )
+
+    assert sell.action == "sell"
+    assert sell.status == "partial"
+    assert sell.filled_notional == 20.0
+    assert sell.fee == 0.2
+
+    account = load_paper_account("seller")
+    assert account is not None
+    assert account.cash_balance == 979.4
+
+    positions = load_paper_positions("seller")
+    assert len(positions) == 1
+    assert positions[0].shares == 60.0
+    assert positions[0].cost_basis == 24.0
+    assert positions[0].fees_paid == 0.24
+
+    close = record_paper_sell(
+        account_id="seller",
+        run_id="run-sell",
+        condition_id="cond-sell",
+        side="YES",
+        shares=60.0,
+        price=0.55,
+    )
+    assert close.status == "filled"
+    assert load_paper_positions("seller") == []
+
+    transactions = load_account_transactions("seller", limit=5)
+    assert transactions[0].cash_delta == 33.0
+    assert transactions[1].cash_delta == 19.8
 
     config_module._settings = None

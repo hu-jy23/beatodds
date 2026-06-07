@@ -270,7 +270,7 @@ class PaperOrder(BaseModel):
     question: str = ""
     token_id: str
     side: Literal["YES", "NO"]
-    action: Literal["buy"] = "buy"
+    action: Literal["buy", "sell"] = "buy"
     status: Literal["filled", "partial", "rejected"] = "filled"
     requested_notional: float
     filled_notional: float = 0.0

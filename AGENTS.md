@@ -154,6 +154,28 @@ As of 2026-05-25:
   As of 2026-06-07, `run_paper_eval.py` can also write English timestamped
   Markdown and JSON reports with `--report-dir data/report`; it refreshes live
   CLOB best bid/ask prices on every eval run before computing PnL.
+  As of 2026-06-07, `run_paper_eval.py --sell` can close open ledger
+  positions after live re-marking. It requires `--account-id` and either
+  `--condition-id` for one topic or `--sell-all-eligible`. The default exit
+  strategy is profit-taking: sell the selected position when net realizable
+  return at the current best bid is at least `--sell-min-return 0.05`.
+  Optionally, `--sell-min-score` also sells when
+  `(current_bid - avg_entry_price) * confidence` crosses the supplied
+  threshold. `--sell-fraction` controls partial exits, `--sell-dry-run` reports
+  eligible exits without recording orders, and executed sells credit cash,
+  insert sell orders/fills/transactions, and reduce or remove `paper_positions`.
+  As of 2026-06-07, `scripts/run_paper_maintainer.py` runs an integrated
+  sell-then-buy maintenance pass. It records every considered buy/sell strategy
+  decision and money snapshot to ignored `data/paper_strategy_runs.jsonl`, while
+  executed buy/sell orders are also appended to `data/paper_decisions.jsonl`.
+  The default account is `paper-wise-1000`, created with $1000, risk profile
+  `wise`, max order $25, max market exposure $60, max total exposure $600, and
+  $250 cash buffer. Wise entry defaults are conservative: scan 300 markets,
+  inspect top 6 non-sports targets, max spread 5c, min gross edge 2.5c, min net
+  edge 1c, min confidence 0.25, and 0.5%-2.5% cash sizing by edge. Wise exit
+  defaults sell at current best bid when return is at least +8%, when
+  `(current_bid - avg_entry_price) * confidence >= 0.02`, or when return is
+  at or below -20%.
   Inspection entry point:
   `uv run scripts/run_paper_account.py --account-id paper-live-1000 --show --orders --positions --transactions`.
 - As of 2026-06-07, scanner market universe size is configurable. Gamma
@@ -216,6 +238,9 @@ uv run scripts/run_paper_trader.py --trial-aggressive
 uv run scripts/run_paper_eval.py --account-id paper-live-1000 --top-k 5
 uv run scripts/run_paper_eval.py --account-id paper-live-1000 --all
 uv run scripts/run_paper_eval.py --account-id paper-live-1000 --all --report-dir data/report
+uv run scripts/run_paper_eval.py --account-id paper-live-1000 --all --condition-id <condition_id> --sell --sell-dry-run
+uv run scripts/run_paper_maintainer.py --account-id paper-wise-1000 --init-only
+uv run scripts/run_paper_maintainer.py --account-id paper-wise-1000
 uv run scripts/run_scanner.py --scan-limit 250 --top 5
 ```
 
@@ -565,6 +590,11 @@ Current state:
   logs all decisions to JSONL, and persists workflow/eval provenance.
 - `run_paper_eval.py` can re-check `paper_decisions.jsonl`, select top-k
   confidence buys or all buys, and report current bid-based unrealized PnL.
+- `run_paper_eval.py --sell` can close eligible open positions at current best
+  bid using a configurable profit-taking or confidence-weighted score trigger.
+- `run_paper_maintainer.py` can maintain a wise paper account by selling
+  eligible open positions, buying new high-threshold opportunities, and logging
+  strategy params plus money snapshots to `data/paper_strategy_runs.jsonl`.
 - Durable mark snapshots, final resolution PnL, and drawdown/hit-rate reporting
   still need to be added.
 
