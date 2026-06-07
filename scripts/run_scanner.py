@@ -21,6 +21,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--top", type=int, default=10)
     parser.add_argument(
+        "--scan-limit",
+        type=int,
+        help="Number of liquid Gamma markets to page through before CLOB filtering",
+    )
+    parser.add_argument(
         "--mine-all",
         action="store_true",
         help="Run RelationMiner on all candidates instead of the displayed top-N",
@@ -32,7 +37,7 @@ def main():
     )
     args = parser.parse_args()
 
-    scanner = Scanner()
+    scanner = Scanner(market_limit=args.scan_limit)
     candidates = scanner.scan()
 
     print(f"\n{'='*60}")

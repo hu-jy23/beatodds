@@ -159,6 +159,8 @@ def _print_due_markets(stale_hours: float, limit: int) -> None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--top", type=int, default=10)
+    parser.add_argument("--scan-limit", type=int,
+                        help="Number of liquid Gamma markets to scan before eval filters")
     parser.add_argument("--exclude-sports", action="store_true",
                         help="Skip World Cup / NBA and other sports markets")
     parser.add_argument("--min-prob", type=float, default=0.0,
@@ -250,7 +252,7 @@ def main():
         return
 
     # --- Scan ---
-    scanner = Scanner()
+    scanner = Scanner(market_limit=args.scan_limit)
     candidates = scanner.scan()
     tradeable = [c for c in candidates if c.snapshot.spread < 0.05]
     logger.info(f"Scanner: {len(candidates)} candidates, {len(tradeable)} tradeable")

@@ -151,8 +151,19 @@ As of 2026-05-25:
   It reads `data/paper_decisions.jsonl`, selects buy decisions by forecast
   confidence, resolves token IDs from the log/ledger/local DBs, refreshes CLOB
   best bids, and reports mark-to-market unrealized PnL.
+  As of 2026-06-07, `run_paper_eval.py` can also write English timestamped
+  Markdown and JSON reports with `--report-dir data/report`; it refreshes live
+  CLOB best bid/ask prices on every eval run before computing PnL.
   Inspection entry point:
   `uv run scripts/run_paper_account.py --account-id paper-live-1000 --show --orders --positions --transactions`.
+- As of 2026-06-07, scanner market universe size is configurable. Gamma
+  `/markets` effectively returns about 100 rows per request, so
+  `GammaClient.get_liquid_markets()` now paginates with `offset`.
+  `Settings.scanner_market_limit` defaults to 500 and can be overridden with
+  `SCANNER_MARKET_LIMIT` in `.env`; `scanner_gamma_page_limit` defaults to 100.
+  CLI commands using `Scanner` accept `--scan-limit`, e.g.
+  `uv run scripts/run_scanner.py --scan-limit 250 --top 5` or
+  `uv run scripts/run_paper_trader.py --trial-aggressive --scan-limit 1000`.
 - Current uncommitted development includes:
   - `scripts/run_forecast.py`: sports and probability filters.
   - `scripts/run_batch_eval.py`: batch forecasting, stored records, manual
@@ -204,6 +215,8 @@ uv run scripts/run_paper_trader.py --top 5
 uv run scripts/run_paper_trader.py --trial-aggressive
 uv run scripts/run_paper_eval.py --account-id paper-live-1000 --top-k 5
 uv run scripts/run_paper_eval.py --account-id paper-live-1000 --all
+uv run scripts/run_paper_eval.py --account-id paper-live-1000 --all --report-dir data/report
+uv run scripts/run_scanner.py --scan-limit 250 --top 5
 ```
 
 Observed live eval state:
@@ -230,6 +243,20 @@ Observed live eval state:
 - Paper-trading PnL is now evaluated through the durable ledger plus live
   re-marking/re-checking. Decision logs live under ignored `data/` and should
   not be committed.
+- Scheduled paper eval reports should use `--report-dir data/report` and must
+  refresh current CLOB prices on each run before computing PnL.
+- The scheduled paper eval automation should not run `uv sync` or rebuild
+  `.venv`; PyPI access may fail in automation and the current `odds` Conda
+  interpreter is Python 3.12 while the preserved project environment is Python
+  3.11. It also cannot rely on `.venv` pointing to
+  `C:\Users\Ender\AppData\Roaming\uv\python\...`, because Codex automation may
+  be blocked from launching that AppData uv-managed base interpreter. Keep the
+  workspace-local copied runtime under ignored `.runtime/` and run the committed
+  wrapper instead:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts\run_paper_eval_report.ps1`. The wrapper rewrites `.venv\pyvenv.cfg`
+  to the workspace-local CPython 3.11 runtime, verifies `pydantic`, and then
+  runs the report command.
 - Latest aggressive trial on 2026-06-06 forecasted 20 markets, placed 16 paper
   buys, and left `paper-live-1000` with $502.04 cash, 18 total orders, and 17
   open positions.
@@ -238,6 +265,9 @@ Observed live eval state:
   (-1.13%). All buys marked 18/18, invested $497.96, value $488.31,
   PnL -$9.65 (-1.94%). This is mark-to-market at current best bids, not final
   resolution PnL.
+- Scanner pagination smoke on 2026-06-07:
+  `uv run scripts/run_scanner.py --scan-limit 250 --top 5` fetched 250 Gamma
+  markets and produced 179 CLOB-backed candidates.
 
 ## Milestone Plan
 

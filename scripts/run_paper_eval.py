@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -56,6 +57,105 @@ def _mark_to_dict(mark) -> dict:
     }
 
 
+def _report_text(
+    *,
+    selector: str,
+    log_path: Path,
+    account_id: str | None,
+    run_id: str | None,
+    summary: dict,
+    marks: list,
+) -> str:
+    generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    lines = [
+        "# Paper Trading Mark-to-Market Report",
+        "",
+        f"- Generated at: {generated_at}",
+        f"- Decision log: `{log_path}`",
+        f"- Selection: {selector}",
+        "- Market prices: refreshed from live CLOB order books during this run",
+    ]
+    if account_id:
+        lines.append(f"- Account: `{account_id}`")
+    if run_id:
+        lines.append(f"- Run: `{run_id}`")
+    lines.extend([
+        "",
+        "## Summary",
+        "",
+        f"- Selected buy decisions: {summary['selected']}",
+        f"- Marked decisions: {summary['marked']}",
+        f"- Unmarked decisions: {summary['unmarked']}",
+        f"- Invested capital: {_fmt_money(float(summary['invested']))}",
+        f"- Current liquidation value: {_fmt_money(float(summary['current_value']))}",
+        f"- Unrealized PnL: {_fmt_money(float(summary['pnl']))}",
+        f"- Unrealized return: {_fmt_pct(float(summary['return_pct']))}",
+        f"- Winners / losers: {summary['winners']} / {summary['losers']}",
+        "",
+        "## Decisions",
+        "",
+        "| # | Status | Side | Confidence | Cost | Bid | PnL | Return | Question |",
+        "|---:|---|---|---:|---:|---:|---:|---:|---|",
+    ])
+    for idx, mark in enumerate(marks, start=1):
+        decision = mark.decision
+        bid = f"{mark.current_bid:.3f}" if mark.current_bid is not None else "?"
+        question = decision.question.replace("|", "\\|").replace("\n", " ")
+        lines.append(
+            f"| {idx} | {mark.status} | {decision.side} | {decision.confidence:.2f} | "
+            f"{_fmt_money(mark.cost_basis)} | {bid} | {_fmt_money(mark.pnl)} | "
+            f"{_fmt_pct(mark.return_pct)} | {question[:140]} |"
+        )
+    lines.extend([
+        "",
+        "Note: PnL is mark-to-market using current best bids as liquidation value. "
+        "It is not final resolution PnL.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def _write_reports(
+    report_dir: Path,
+    *,
+    selector: str,
+    log_path: Path,
+    account_id: str | None,
+    run_id: str | None,
+    summary: dict,
+    marks: list,
+) -> tuple[Path, Path]:
+    report_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    markdown_path = report_dir / f"paper_eval_{stamp}.md"
+    json_path = report_dir / f"paper_eval_{stamp}.json"
+    text = _report_text(
+        selector=selector,
+        log_path=log_path,
+        account_id=account_id,
+        run_id=run_id,
+        summary=summary,
+        marks=marks,
+    )
+    payload = {
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "selector": selector,
+        "log_path": str(log_path),
+        "account_id": account_id,
+        "run_id": run_id,
+        "summary": summary,
+        "marks": [_mark_to_dict(mark) for mark in marks],
+    }
+    markdown_path.write_text(text, encoding="utf-8")
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (report_dir / "paper_eval_latest.md").write_text(text, encoding="utf-8")
+    (report_dir / "paper_eval_latest.json").write_text(
+        json.dumps(payload, indent=2),
+        encoding="utf-8",
+    )
+    return markdown_path, json_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate paper decision earnings")
     parser.add_argument("--log-path", type=Path, default=Path("data") / "paper_decisions.jsonl")
@@ -64,6 +164,11 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, help="Evaluate top K buy decisions by confidence")
     parser.add_argument("--all", action="store_true", help="Evaluate all buy decisions")
     parser.add_argument("--json-out", type=Path, help="Write detailed mark report JSON")
+    parser.add_argument(
+        "--report-dir",
+        type=Path,
+        help="Write timestamped English reports into this directory",
+    )
     args = parser.parse_args()
 
     if args.top_k is not None and args.all:
@@ -120,6 +225,19 @@ def main() -> None:
         }
         args.json_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"\nJSON report written to {args.json_out}")
+
+    if args.report_dir:
+        markdown_path, json_path = _write_reports(
+            args.report_dir,
+            selector=selector,
+            log_path=args.log_path,
+            account_id=args.account_id,
+            run_id=args.run_id,
+            summary=summary,
+            marks=marks,
+        )
+        print(f"\nMarkdown report written to {markdown_path}")
+        print(f"JSON report written to {json_path}")
 
 
 if __name__ == "__main__":

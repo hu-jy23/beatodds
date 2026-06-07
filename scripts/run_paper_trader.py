@@ -238,6 +238,8 @@ def _parse_args():
     parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
     parser.add_argument("--initial-cash", type=float, default=1_000.0)
     parser.add_argument("--top", type=int, default=12)
+    parser.add_argument("--scan-limit", type=int,
+                        help="Number of liquid Gamma markets to scan before trade filters")
     parser.add_argument("--trial-aggressive", action="store_true",
                         help="Use a broader, more purchase-friendly trial policy")
     parser.add_argument("--exclude-sports", action="store_true", default=False)
@@ -268,6 +270,7 @@ def _parse_args():
     args = parser.parse_args()
     if args.trial_aggressive:
         args.top = max(args.top, 20)
+        args.scan_limit = max(args.scan_limit or 0, 1000)
         args.max_spread = max(args.max_spread, 0.10)
         args.min_edge = min(args.min_edge, 0.005)
         args.min_net_edge = min(args.min_net_edge, -0.005)
@@ -298,7 +301,7 @@ def main() -> None:
         "llm_backend": cfg.llm_backend,
     })
 
-    scanner = Scanner()
+    scanner = Scanner(market_limit=args.scan_limit)
     candidates = scanner.scan()
     tradeable = [c for c in candidates if c.snapshot.spread <= args.max_spread]
     if args.exclude_sports:

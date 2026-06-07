@@ -42,6 +42,8 @@ def _is_sports(question: str, category: str) -> bool:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--top", type=int, default=5, help="Number of markets to forecast")
+    parser.add_argument("--scan-limit", type=int,
+                        help="Number of liquid Gamma markets to scan before forecast filters")
     parser.add_argument("--dry-run", action="store_true",
                         help="Scan and parse only; skips Tavily retrieval and final forecasting")
     parser.add_argument("--backtest", action="store_true",
@@ -55,7 +57,7 @@ def main():
     args = parser.parse_args()
 
     # --- Scan ---
-    scanner = Scanner()
+    scanner = Scanner(market_limit=args.scan_limit)
     candidates = scanner.scan()
     # Filter to tradeable (tight spread) markets for forecasting
     tradeable = [c for c in candidates if c.snapshot.spread < 0.05]

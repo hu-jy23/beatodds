@@ -90,22 +90,48 @@ class GammaClient:
         self,
         limit: int = 500,
         min_volume_24h: float = 100.0,
+        page_limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Return active markets ordered by 24h volume."""
-        resp = self._client.get(
-            "/markets",
-            params={
-                "active": "true",
-                "closed": "false",
-                "order": "volume24hr",
-                "ascending": "false",
-                "limit": limit,
-                "volume_num_min": min_volume_24h,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data if isinstance(data, list) else []
+        if limit <= 0:
+            return []
+        page_limit = page_limit or self.cfg.scanner_gamma_page_limit
+        page_limit = max(1, min(page_limit, limit))
+        markets: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        offset = 0
+        while len(markets) < limit:
+            batch_limit = min(page_limit, limit - len(markets))
+            resp = self._client.get(
+                "/markets",
+                params={
+                    "active": "true",
+                    "closed": "false",
+                    "order": "volume24hr",
+                    "ascending": "false",
+                    "limit": batch_limit,
+                    "offset": offset,
+                    "volume_num_min": min_volume_24h,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                break
+            before = len(markets)
+            for item in data:
+                key = str(item.get("conditionId") or item.get("condition_id") or "")
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                markets.append(item)
+                if len(markets) >= limit:
+                    break
+            if len(data) < batch_limit or len(markets) == before:
+                break
+            offset += len(data)
+        return markets
 
     def get_event_markets(self, event_id: str) -> list[MarketMeta]:
         """Fetch all markets in one Gamma event, used for complete neg-risk groups."""
