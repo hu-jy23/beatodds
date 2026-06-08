@@ -34,7 +34,16 @@
           <button class="icon-btn" id="hideLeft" title="Hide event list">&lt;</button>
         </div>
         <div class="search-row">
-          <input id="marketSearch" type="search" placeholder="Search events" />
+          <div class="search-add-row">
+            <input id="marketSearch" type="search" placeholder="Search or add topic" />
+            <button class="btn primary" id="addTopicBtn" title="Search Polymarket online and add topic">Add</button>
+          </div>
+          <div class="topic-add-status" id="topicAddStatus"></div>
+          <div class="fresh-topic-row">
+            <input id="newTopicCap" type="number" min="1" max="500" step="1" value="100" title="Fresh topic cap" />
+            <button class="btn secondary" id="getNewTopicsBtn" title="Fetch fresh online topics without forecasting">Get new topics</button>
+          </div>
+          <div class="topic-add-status" id="topicFetchStatus"></div>
         </div>
         <div class="segmented" role="tablist">
           <button class="segment active" data-filter="all">All</button>

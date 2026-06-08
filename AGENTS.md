@@ -217,6 +217,14 @@ As of 2026-05-25:
   `持仓与交易` also displays an account money strip with cash, projected share
   hold value, total money (`cash + reserved + shares`), and total earn/loss
   versus the account's initial cash.
+  As of 2026-06-08, the left Markets rail search supports adding topics.
+  The `Add` button and Enter key call `/api/add-topic`, which searches online
+  Polymarket/Gamma data instead of local market records. Exact online lookups
+  support condition id, Gamma numeric id, and slug; text queries rank a live
+  Gamma market sample. A found online topic is persisted into local DuckDB,
+  selected, and tracked; a missing topic shows an inline reminder instead of
+  creating a fake topic. The state payload keeps the selected event visible
+  even when it falls outside the default top-volume event slice.
   Inspection entry point:
   `uv run scripts/run_paper_account.py --account-id paper-live-1000 --show --orders --positions --transactions`.
 - As of 2026-06-07, scanner market universe size is configurable. Gamma
@@ -283,6 +291,10 @@ uv run scripts/run_paper_eval.py --account-id paper-live-1000 --all --condition-
 uv run scripts/run_paper_maintainer.py --account-id paper-wise-1000 --init-only
 uv run scripts/run_paper_maintainer.py --account-id paper-wise-1000
 uv run scripts/run_scanner.py --scan-limit 250 --top 5
+uv run python -m py_compile gui/server.py
+node --check gui/web/app.js
+uv run python -m py_compile gui/server.py src/beatodds/data/gamma_client.py
+uv run ruff check gui/server.py src/beatodds/data/gamma_client.py
 ```
 
 Observed live eval state:
@@ -334,6 +346,33 @@ Observed live eval state:
 - Scanner pagination smoke on 2026-06-07:
   `uv run scripts/run_scanner.py --scan-limit 250 --top 5` fetched 250 Gamma
   markets and produced 179 CLOB-backed candidates.
+- GUI add-topic browser smoke on 2026-06-08: searching
+  `Iran closes its airspace` and clicking Add selected/tracked a matching
+  market; searching `zzzz no such beatodds topic 987654321` showed the inline
+  not-found reminder.
+- GUI online add-topic smoke on 2026-06-08: `/api/add-topic` and the browser UI
+  search Polymarket/Gamma online, added `Will Bitcoin reach $100,000 in June?`
+  from the live API, and showed `No online Polymarket topic matched...` for a
+  junk query.
+- GUI token button price smoke on 2026-06-08: selected-event market cards now
+  refresh YES/NO token buttons from live CLOB best asks during
+  `/api/market/<condition_id>` refresh, falling back to stored Gamma outcome
+  prices when live books are unavailable. Browser smoke showed live ask prices
+  on the selected Bitcoin market token buttons.
+- GUI topic list fix on 2026-06-08: `GuiData.markets()` no longer filters all
+  markets to the single global max `fetched_at` batch. Online add-topic writes
+  can create one-row newer batches, so the left topic list must read the full
+  local market universe and only apply `event_id` filtering for event detail.
+  Smoke check returned 103 visible events after the fix.
+- GUI fresh-topic ingestion on 2026-06-08: launch/state reads now filter out
+  markets/events with stored end dates earlier than the current date, while
+  keeping unknown end-date rows. The left rail has a `Get new topics` button
+  with editable cap defaulting to 100. It calls `/api/get-new-topics`, fetches
+  live Gamma market pages from a persisted `topic_feed_offset`, skips already
+  stored condition ids, writes metadata only, and does not run forecasts or
+  Tavily/LLM calls. Repeated clicks advance the offset and add the next unseen
+  current topics. Browser smoke with cap 2 increased visible events from 80 to
+  82 and showed `Added 2 fresh online topics.`
 
 ## Milestone Plan
 

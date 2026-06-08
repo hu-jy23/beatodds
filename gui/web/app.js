@@ -6,6 +6,8 @@ const app = {
   infoTab: "rules",
   filter: "all",
   search: "",
+  topicAddResult: null,
+  topicFetchResult: null,
   updating: false,
   pendingUpdateAll: false,
   dragPanel: null,
@@ -120,6 +122,8 @@ async function refreshAccountPositions(source = "positions section") {
 async function post(path, payload) {
   logControl("POST start", { path, payload });
   app.state = await api(path, { method: "POST", body: JSON.stringify(payload) });
+  app.topicAddResult = app.state.topic_add_result || null;
+  app.topicFetchResult = app.state.topic_fetch_result || null;
   app.selectedEventId = app.state.selected_event?.event_id || app.selectedEventId;
   app.selectedMarketId = app.state.selected?.market?.condition_id || app.selectedMarketId;
   app.selectedSide = app.state.selected?.side || app.state.state.selected_side || app.selectedSide || "YES";
@@ -130,6 +134,24 @@ async function post(path, payload) {
   });
   render();
   if (app.page === "markets") await refreshSelectedMarketDetail();
+}
+
+async function addTopicFromSearch() {
+  const query = $("marketSearch").value.trim();
+  logControl("add topic clicked", { query });
+  app.topicAddResult = { status: "pending", message: "Searching Polymarket online..." };
+  renderTopicAddStatus();
+  await post("/api/add-topic", { query });
+}
+
+async function getNewTopics() {
+  const rawCap = Number($("newTopicCap")?.value || 100);
+  const cap = Math.max(1, Math.min(Number.isFinite(rawCap) ? Math.floor(rawCap) : 100, 500));
+  $("newTopicCap").value = String(cap);
+  logControl("get new topics clicked", { cap });
+  app.topicFetchResult = { status: "pending", message: `Fetching up to ${cap} fresh topics...` };
+  renderTopicFetchStatus();
+  await post("/api/get-new-topics", { cap });
 }
 
 async function refreshSelectedMarketDetail() {
@@ -500,7 +522,14 @@ function renderMarkets() {
   if (app.filter === "tracked") events = events.filter((e) => Number(e.tracked_count || 0) > 0);
   if (app.filter === "neg") events = events.filter((e) => Number(e.neg_risk_count || 0) > 0);
 
-  $("marketList").innerHTML = events
+  renderTopicAddStatus();
+  renderTopicFetchStatus();
+  $("marketList").innerHTML = events.length === 0
+    ? `<div class="market-empty">
+        <strong>No loaded events match this search.</strong>
+        <span>Use Add to search Polymarket online and track a matching topic.</span>
+      </div>`
+    : events
     .map((event) => {
       const active = event.event_id === app.selectedEventId ? "active" : "";
       const stance = eventStanceClass(event);
@@ -535,6 +564,32 @@ function renderMarkets() {
       }
     });
   });
+}
+
+function renderTopicAddStatus() {
+  const result = app.topicAddResult;
+  const el = $("topicAddStatus");
+  if (!el) return;
+  if (!result?.message) {
+    el.textContent = "";
+    el.className = "topic-add-status";
+    return;
+  }
+  el.textContent = result.message;
+  el.className = `topic-add-status ${result.status || ""}`;
+}
+
+function renderTopicFetchStatus() {
+  const result = app.topicFetchResult;
+  const el = $("topicFetchStatus");
+  if (!el) return;
+  if (!result?.message) {
+    el.textContent = "";
+    el.className = "topic-add-status";
+    return;
+  }
+  el.textContent = result.message;
+  el.className = `topic-add-status ${result.status || ""}`;
 }
 
 function renderSelected() {
@@ -710,6 +765,8 @@ function renderEventMarkets(event) {
             const forecast = market.p_f === undefined
               ? "no forecast"
               : `${forecastDirectionLabel(market.forecast_direction)} · fair ${fmtPct(market.p_f)}`;
+            const yesSource = market.yes_price_source === "live_ask" ? "live ask" : "stored";
+            const noSource = market.no_price_source === "live_ask" ? "live ask" : "stored";
             return `
               <div class="event-market-row ${active}" data-id="${market.condition_id}">
                 <button class="market-main" data-id="${market.condition_id}" data-side="YES">
@@ -723,10 +780,12 @@ function renderEventMarkets(event) {
                   <button class="token-btn yes ${yesActive}" data-id="${market.condition_id}" data-side="YES">
                     <span>${escapeHtml(market.yes_label || "YES")}</span>
                     <strong>${fmtToken(market.yes_price)}</strong>
+                    <small>${escapeHtml(yesSource)}</small>
                   </button>
                   <button class="token-btn no ${noActive}" data-id="${market.condition_id}" data-side="NO">
                     <span>${escapeHtml(market.no_label || "NO")}</span>
                     <strong>${fmtToken(market.no_price)}</strong>
+                    <small>${escapeHtml(noSource)}</small>
                   </button>
                 </span>
               </div>
@@ -1376,8 +1435,16 @@ function bindEvents() {
   });
   $("marketSearch").addEventListener("input", (event) => {
     app.search = event.target.value;
+    app.topicAddResult = null;
     renderMarkets();
   });
+  $("marketSearch").addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    await addTopicFromSearch();
+  });
+  $("addTopicBtn").addEventListener("click", addTopicFromSearch);
+  $("getNewTopicsBtn").addEventListener("click", getNewTopics);
   document.querySelectorAll(".segment").forEach((button) => {
     button.addEventListener("click", () => {
       document.querySelectorAll(".segment").forEach((b) => b.classList.remove("active"));

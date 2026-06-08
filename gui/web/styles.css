@@ -206,6 +206,57 @@ h3 {
   padding: 14px 16px 8px;
 }
 
+.search-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.search-add-row .btn {
+  min-width: 48px;
+  height: 36px;
+}
+
+.fresh-topic-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.fresh-topic-row .btn {
+  height: 36px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.fresh-topic-row input {
+  padding: 0 8px;
+}
+
+.topic-add-status {
+  min-height: 18px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.topic-add-status.added {
+  color: var(--green);
+}
+
+.topic-add-status.not_found,
+.topic-add-status.empty {
+  color: var(--amber);
+}
+
+.topic-add-status.pending {
+  color: var(--blue);
+}
+
 input,
 select,
 textarea {
@@ -271,9 +322,29 @@ textarea:focus {
 }
 
 .market-list {
-  height: calc(100% - 168px);
+  height: calc(100% - 240px);
   overflow: auto;
   padding: 0 10px 18px;
+}
+
+.market-empty {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+}
+
+.market-empty strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.market-empty span {
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .market-item {
@@ -444,6 +515,14 @@ textarea:focus {
 .token-btn strong {
   font-size: 18px;
   line-height: 1;
+}
+
+.token-btn small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
 }
 
 .token-btn.yes {

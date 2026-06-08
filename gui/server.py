@@ -21,8 +21,10 @@ import duckdb
 from loguru import logger
 
 from beatodds.common.config import get_settings
-from beatodds.common.types import CandidateMarket, MarketMeta, PriceSnapshot
+from beatodds.common.db import ensure_schema
+from beatodds.common.types import CandidateMarket, EventMeta, MarketMeta, PriceSnapshot
 from beatodds.data.clob_client import ClobReadClient
+from beatodds.data.gamma_client import GammaClient
 from beatodds.evaluation.paper_store import (
     create_paper_account,
     deposit_cash,
@@ -60,6 +62,7 @@ class GuiState:
     reviews: list[dict]
     messages: list[dict]
     news: list[dict]
+    topic_feed_offset: int = 0
 
 
 class GuiStore:
@@ -72,7 +75,7 @@ class GuiStore:
     def load(self) -> GuiState:
         with self._lock:
             if not self.path.exists():
-                return GuiState([], None, None, None, "YES", None, [], [], [], [], [], [])
+                return GuiState([], None, None, None, "YES", None, [], [], [], [], [], [], 0)
             data = json.loads(self.path.read_text(encoding="utf-8"))
             selected_market_id = data.get("selected_market_id") or data.get("selected_id")
             return GuiState(
@@ -89,6 +92,7 @@ class GuiStore:
                 reviews=list(data.get("reviews", [])),
                 messages=list(data.get("messages", [])),
                 news=list(data.get("news", [])),
+                topic_feed_offset=int(data.get("topic_feed_offset") or 0),
             )
 
     def save(self, state: GuiState) -> None:
@@ -274,7 +278,7 @@ class GuiData:
         state = self.store.load()
         return {
             "state": asdict(state),
-            "events": events,
+            "events": self._ensure_event_visible(events, selected_event),
             "markets": markets[:120],
             "selected_event": selected_event,
             "selected": selected,
@@ -284,6 +288,20 @@ class GuiData:
             "history": state.actions[:40],
             "notes": state.notes[:60],
         }
+
+    def _ensure_event_visible(
+        self,
+        events: list[dict],
+        selected_event: dict | None,
+    ) -> list[dict]:
+        if not selected_event:
+            return events
+        selected_event_id = selected_event.get("event_id")
+        if not selected_event_id:
+            return events
+        if any(event.get("event_id") == selected_event_id for event in events):
+            return events
+        return [selected_event, *events]
 
     def account_context(self) -> dict:
         state = self.store.load()
@@ -657,8 +675,10 @@ class GuiData:
             )
             filters: list[str] = []
             params: list[object] = []
-            if "fetched_at" in columns:
-                filters.append("fetched_at = (SELECT MAX(fetched_at) FROM markets)")
+            if "active" in columns:
+                filters.append("active = TRUE")
+            if "close_time" in columns:
+                filters.append("(close_time IS NULL OR CAST(close_time AS DATE) >= CURRENT_DATE)")
             if event_id:
                 event_key = (
                     "COALESCE(NULLIF(event_id, ''), condition_id)"
@@ -765,7 +785,10 @@ class GuiData:
                     event["forecast_edge"] = forecast["edge"]
                     event["forecast_confidence"] = forecast["confidence"]
 
+        current_events = []
         for event in grouped.values():
+            if _is_past_date(event.get("end_time")):
+                continue
             if not event["volume_24h"]:
                 event["volume_24h"] = event["market_volume_24h"]
             if not event["liquidity"]:
@@ -775,8 +798,9 @@ class GuiData:
             event["top_markets"] = event["markets"][:4]
             event.pop("markets")
             event.pop("_abs_edge_sum", None)
+            current_events.append(event)
         return sorted(
-            grouped.values(),
+            current_events,
             key=lambda item: item["volume_24h"],
             reverse=True,
         )[:120]
@@ -786,6 +810,7 @@ class GuiData:
         event_id: str | None,
         markets: list[dict] | None = None,
         events: list[dict] | None = None,
+        include_live_prices: bool = False,
     ) -> dict | None:
         if not event_id:
             return None
@@ -811,6 +836,8 @@ class GuiData:
                     "forecast_direction": forecast_edge["forecast_direction"],
                 })
             enriched_markets.append(enriched)
+        if include_live_prices:
+            self._attach_live_button_prices(enriched_markets)
 
         edges = [m["edge"] for m in enriched_markets if "edge" in m]
         dominant = max(
@@ -894,6 +921,41 @@ class GuiData:
             "no_label": (market.get("outcomes") or ["YES", "NO"])[1]
             if len(market.get("outcomes") or []) > 1 else "NO",
         }
+
+    def _attach_live_button_prices(self, markets: list[dict], limit: int = 30) -> None:
+        if not markets:
+            return
+        client = ClobReadClient()
+        for market in markets[:limit]:
+            yes_live = self._live_button_price(client, market.get("token_yes_id"))
+            no_live = self._live_button_price(client, market.get("token_no_id"))
+            if yes_live is not None:
+                market["yes_price"] = yes_live
+                market["yes_price_source"] = "live_ask"
+            else:
+                market["yes_price_source"] = "stored"
+            if no_live is not None:
+                market["no_price"] = no_live
+                market["no_price_source"] = "live_ask"
+            else:
+                market["no_price_source"] = "stored"
+        for market in markets[limit:]:
+            market.setdefault("yes_price_source", "stored")
+            market.setdefault("no_price_source", "stored")
+
+    def _live_button_price(self, client: ClobReadClient, token_id: object) -> float | None:
+        token = str(token_id or "")
+        if not token:
+            return None
+        try:
+            book = client.get_order_book(token)
+        except Exception as exc:
+            logger.debug(f"Could not fetch live button price for token {token}: {exc}")
+            return None
+        asks = _book_levels((book or {}).get("asks") or [])
+        if not asks:
+            return None
+        return asks[0]["price"]
 
     def topic_logs(self, condition_id: str) -> dict:
         state = self.store.load()
@@ -979,6 +1041,442 @@ class GuiData:
             state.selected_event_id = market["event_id"]
         self.store.save(state)
         return self.state_payload()
+
+    def add_topic(self, query: str) -> dict:
+        query = query.strip()
+        if not query:
+            payload = self.state_payload()
+            payload["topic_add_result"] = {
+                "status": "empty",
+                "message": "Enter a Polymarket question, slug, or condition id.",
+                "query": query,
+            }
+            return payload
+
+        matches = self.search_topics_online(query, limit=1)
+        if not matches:
+            payload = self.state_payload()
+            payload["topic_add_result"] = {
+                "status": "not_found",
+                "message": f"No online Polymarket topic matched: {query}",
+                "query": query,
+            }
+            return payload
+
+        market = matches[0]
+        state = self.store.load()
+        tracked_ids = set(state.tracked_ids)
+        tracked_ids.add(market["condition_id"])
+        state.tracked_ids = list(tracked_ids)
+        state.selected_market_id = market["condition_id"]
+        state.selected_id = market["condition_id"]
+        state.selected_event_id = market["event_id"]
+        state.selected_side = _side(state.selected_side)
+        self.store.save(state)
+        self.store.append_action("add_topic", market["condition_id"], {
+            "query": query,
+            "question": market["question"],
+        })
+
+        payload = self.state_payload()
+        payload["topic_add_result"] = {
+            "status": "added",
+            "message": f"Added online topic: {market['question']}",
+            "query": query,
+            "condition_id": market["condition_id"],
+            "event_id": market["event_id"],
+            "question": market["question"],
+        }
+        return payload
+
+    def get_new_topics(self, cap: int = 100) -> dict:
+        cap = max(1, min(int(cap or 100), 500))
+        state = self.store.load()
+        offset = max(0, int(state.topic_feed_offset or 0))
+        existing = self._existing_condition_ids()
+        raw_new: list[dict] = []
+        pages_read = 0
+        exhausted = False
+
+        try:
+            with GammaClient() as gamma:
+                while len(raw_new) < cap and pages_read < 25:
+                    page_limit = max(
+                        1,
+                        min(cap - len(raw_new), self.cfg.scanner_gamma_page_limit, 100),
+                    )
+                    batch = gamma.get_liquid_markets_page(
+                        limit=page_limit,
+                        offset=offset,
+                        min_volume_24h=0.0,
+                    )
+                    pages_read += 1
+                    offset += len(batch)
+                    if not batch:
+                        exhausted = True
+                        break
+                    for raw in batch:
+                        condition_id = str(raw.get("conditionId") or raw.get("condition_id") or "")
+                        if not condition_id or condition_id in existing:
+                            continue
+                        try:
+                            market = gamma.parse_market(raw)
+                        except Exception:
+                            continue
+                        if not self._is_current_market(market):
+                            existing.add(condition_id)
+                            continue
+                        raw_new.append(raw)
+                        existing.add(condition_id)
+                        if len(raw_new) >= cap:
+                            break
+                markets, events = self._parse_online_topic_batch(gamma, raw_new)
+        except Exception as exc:
+            logger.warning(f"Fresh topic fetch failed: {exc}")
+            payload = self.state_payload()
+            payload["topic_fetch_result"] = {
+                "status": "error",
+                "message": f"Could not fetch new online topics: {exc}",
+                "cap": cap,
+                "added": 0,
+                "offset": offset,
+            }
+            return payload
+
+        state = self.store.load()
+        state.topic_feed_offset = offset
+        self.store.save(state)
+
+        before_count = len(self._existing_condition_ids())
+        self._write_online_topics(markets, events)
+        after_count = len(self._existing_condition_ids())
+        added = max(0, after_count - before_count)
+
+        payload = self.state_payload()
+        if added:
+            status = "added"
+            message = f"Added {added} fresh online topics."
+        elif exhausted:
+            status = "not_found"
+            message = "No new online topics were available from Gamma."
+        else:
+            status = "not_found"
+            message = "No unseen current topics found in the next Gamma pages."
+        payload["topic_fetch_result"] = {
+            "status": status,
+            "message": message,
+            "cap": cap,
+            "added": added,
+            "offset": offset,
+        }
+        return payload
+
+    def _existing_condition_ids(self) -> set[str]:
+        if not self.market_db.exists():
+            return set()
+        try:
+            with duckdb.connect(str(self.market_db), read_only=True) as conn:
+                tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+                if "markets" not in tables:
+                    return set()
+                rows = conn.execute("SELECT condition_id FROM markets").fetchall()
+        except Exception:
+            return set()
+        return {str(row[0]) for row in rows if row[0]}
+
+    def _is_current_market(self, market: MarketMeta) -> bool:
+        if not market.active:
+            return False
+        if market.close_time is None:
+            return True
+        return market.close_time.date() >= datetime.now().date()
+
+    def _parse_online_topic_batch(
+        self,
+        gamma: GammaClient,
+        raw_markets: list[dict],
+    ) -> tuple[list[MarketMeta], list[EventMeta]]:
+        markets: list[MarketMeta] = []
+        events_by_id: dict[str, EventMeta] = {}
+        for raw in raw_markets:
+            try:
+                market = gamma.parse_market(raw)
+            except Exception:
+                continue
+            if not market.condition_id or not self._is_current_market(market):
+                continue
+            markets.append(market)
+            raw_events = raw.get("events") or []
+            if isinstance(raw_events, list) and raw_events:
+                raw_event = raw_events[0]
+                if isinstance(raw_event, dict):
+                    event = gamma.parse_event(raw_event)
+                    if event.event_id:
+                        events_by_id[event.event_id] = event
+                        continue
+            if market.event_id and market.event_id not in events_by_id:
+                try:
+                    raw_event = gamma.get_event(market.event_id)
+                except Exception:
+                    raw_event = None
+                if raw_event:
+                    event = gamma.parse_event(raw_event)
+                    if event.event_id:
+                        events_by_id[event.event_id] = event
+                        continue
+                events_by_id[market.event_id] = EventMeta(
+                    event_id=market.event_id,
+                    title=market.question,
+                    slug=market.slug,
+                    category=market.category,
+                    end_time=market.close_time,
+                    volume_24h=market.volume_24h,
+                    liquidity=market.liquidity,
+                    active=market.active,
+                    market_count=1,
+                )
+        return markets, list(events_by_id.values())
+
+    def search_topics_online(self, query: str, limit: int = 8) -> list[dict]:
+        query = query.strip()
+        if not query:
+            return []
+        scan_limit = max(self.cfg.scanner_market_limit, 1000)
+        try:
+            with GammaClient() as gamma:
+                raw_markets = gamma.search_markets(query, limit=limit, scan_limit=scan_limit)
+                if not raw_markets:
+                    return []
+                markets, events = self._parse_online_topics(gamma, raw_markets)
+        except Exception as exc:
+            logger.warning(f"Online topic search failed for {query!r}: {exc}")
+            return []
+        self._write_online_topics(markets, events)
+        tracked = set(self.store.load().tracked_ids)
+        results: list[dict] = []
+        for market in markets[:limit]:
+            local = self._market_by_id(market.condition_id)
+            if local:
+                results.append(local)
+            else:
+                results.append(_market_meta_row(market, tracked))
+        return results
+
+    def _parse_online_topics(
+        self,
+        gamma: GammaClient,
+        raw_markets: list[dict],
+    ) -> tuple[list[MarketMeta], list[EventMeta]]:
+        markets_by_id: dict[str, MarketMeta] = {}
+        events_by_id: dict[str, EventMeta] = {}
+
+        for raw in raw_markets:
+            market = gamma.parse_market(raw)
+            if market.condition_id:
+                markets_by_id[market.condition_id] = market
+
+            raw_events = raw.get("events") or []
+            if isinstance(raw_events, list) and raw_events:
+                raw_event = raw_events[0]
+                if isinstance(raw_event, dict):
+                    event = gamma.parse_event(raw_event)
+                    if event.event_id:
+                        events_by_id[event.event_id] = event
+
+            event_id = market.event_id
+            if event_id:
+                try:
+                    raw_event = gamma.get_event(event_id)
+                except Exception as exc:
+                    logger.debug(f"Could not fetch online event {event_id}: {exc}")
+                    raw_event = None
+                if raw_event:
+                    event = gamma.parse_event(raw_event)
+                    if event.event_id:
+                        events_by_id[event.event_id] = event
+                    raw_event_markets = raw_event.get("markets") or []
+                    if isinstance(raw_event_markets, list):
+                        for event_market_raw in raw_event_markets:
+                            if not isinstance(event_market_raw, dict):
+                                continue
+                            try:
+                                event_market = gamma.parse_market(event_market_raw, raw_event)
+                            except Exception:
+                                continue
+                            if event_market.condition_id:
+                                markets_by_id[event_market.condition_id] = event_market
+
+            if market.event_id and market.event_id not in events_by_id:
+                events_by_id[market.event_id] = EventMeta(
+                    event_id=market.event_id,
+                    title=market.question,
+                    slug=market.slug,
+                    category=market.category,
+                    end_time=market.close_time,
+                    volume_24h=market.volume_24h,
+                    liquidity=market.liquidity,
+                    active=market.active,
+                    market_count=1,
+                )
+
+        ordered_markets: list[MarketMeta] = []
+        for raw in raw_markets:
+            condition_id = str(raw.get("conditionId") or raw.get("condition_id") or "")
+            market = markets_by_id.get(condition_id)
+            if market:
+                ordered_markets.append(market)
+        return ordered_markets, list(events_by_id.values())
+
+    def _write_online_topics(self, markets: list[MarketMeta], events: list[EventMeta]) -> None:
+        if not markets:
+            return
+        fetched_at = datetime.now(timezone.utc)
+        conn = ensure_schema()
+        try:
+            for event in events:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO events (
+                        event_id, title, slug, ticker, description, image, icon,
+                        category, tags_json, start_time, end_time, volume_24h,
+                        liquidity, active, closed, archived, neg_risk, market_count,
+                        fetched_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        event.event_id,
+                        event.title,
+                        event.slug,
+                        event.ticker,
+                        event.description,
+                        event.image,
+                        event.icon,
+                        event.category,
+                        json.dumps(event.tags),
+                        event.start_time,
+                        event.end_time,
+                        event.volume_24h,
+                        event.liquidity,
+                        event.active,
+                        event.closed,
+                        event.archived,
+                        event.neg_risk,
+                        event.market_count,
+                        fetched_at,
+                    ],
+                )
+            for market in markets:
+                conn.execute("DELETE FROM markets WHERE condition_id = ?", [market.condition_id])
+                conn.execute(
+                    """
+                    INSERT INTO markets (
+                        condition_id, event_id, question, description, resolution_text, category,
+                        neg_risk, neg_risk_market_id, token_yes_id, token_no_id,
+                        outcome_count, outcomes_json, outcome_prices_json,
+                        close_time, created_time,
+                        volume_24h, liquidity, active, slug, fetched_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        market.condition_id,
+                        market.event_id,
+                        market.question,
+                        market.description,
+                        market.resolution_text,
+                        market.category,
+                        market.neg_risk,
+                        market.neg_risk_market_id,
+                        market.token_yes_id,
+                        market.token_no_id,
+                        market.outcome_count,
+                        json.dumps(market.outcomes),
+                        json.dumps(market.outcome_prices),
+                        market.close_time,
+                        market.created_time,
+                        market.volume_24h,
+                        market.liquidity,
+                        market.active,
+                        market.slug,
+                        fetched_at,
+                    ],
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def search_topics(self, query: str, limit: int = 8) -> list[dict]:
+        query = query.strip()
+        if not query or not self.market_db.exists():
+            return []
+        exact = self._market_by_id(query)
+        results: list[dict] = []
+        seen: set[str] = set()
+        if exact:
+            results.append(exact)
+            seen.add(exact["condition_id"])
+        try:
+            with duckdb.connect(str(self.market_db), read_only=True) as conn:
+                columns = self._columns(conn, "markets")
+                event_select = "event_id" if "event_id" in columns else "'' AS event_id"
+                price_select = (
+                    "outcome_prices_json"
+                    if "outcome_prices_json" in columns else
+                    "'[]' AS outcome_prices_json"
+                )
+                event_tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+                event_matches: list[str] = []
+                if "events" in event_tables:
+                    event_rows = conn.execute(
+                        """
+                        SELECT event_id
+                        FROM events
+                        WHERE LOWER(title) LIKE ?
+                           OR LOWER(slug) LIKE ?
+                           OR LOWER(category) LIKE ?
+                        ORDER BY volume_24h DESC NULLS LAST
+                        LIMIT 10
+                        """,
+                        [f"%{query.lower()}%"] * 3,
+                    ).fetchall()
+                    event_matches = [str(row[0]) for row in event_rows if row[0]]
+                event_clause = ""
+                params: list[object] = [f"%{query.lower()}%"] * 4
+                if event_matches and "event_id" in columns:
+                    placeholders = ", ".join("?" for _ in event_matches)
+                    event_clause = f" OR event_id IN ({placeholders})"
+                    params.extend(event_matches)
+                params.append(limit)
+                rows = conn.execute(
+                    f"""
+                    SELECT condition_id, {event_select}, question, category, neg_risk,
+                           token_yes_id, token_no_id, close_time, volume_24h, liquidity,
+                           active, slug, description, resolution_text, created_time,
+                           outcomes_json, {price_select}
+                    FROM markets
+                    WHERE LOWER(condition_id) LIKE ?
+                       OR LOWER(question) LIKE ?
+                       OR LOWER(slug) LIKE ?
+                       OR LOWER(category) LIKE ?
+                       {event_clause}
+                    ORDER BY volume_24h DESC NULLS LAST
+                    LIMIT ?
+                    """,
+                    params,
+                ).fetchall()
+        except Exception:
+            return results[:limit]
+
+        tracked = set(self.store.load().tracked_ids)
+        for row in rows:
+            if row[0] in seen:
+                continue
+            seen.add(row[0])
+            results.append(_market_row(row, tracked))
+            if len(results) >= limit:
+                break
+        return results
 
     def track(self, condition_id: str, track: bool = True) -> dict:
         state = self.store.load()
@@ -1767,7 +2265,10 @@ class Handler(BaseHTTPRequestHandler):
             event_id = (selected or {}).get("market", {}).get("event_id")
             return self._json({
                 "selected": selected,
-                "selected_event": self.data.event_detail(event_id) if event_id else None,
+                "selected_event": (
+                    self.data.event_detail(event_id, include_live_prices=True)
+                    if event_id else None
+                ),
             })
         if parsed.path.startswith("/assets/"):
             return self._file(parsed.path.removeprefix("/assets/"))
@@ -1783,6 +2284,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.data.select_event(event_id))
         if parsed.path == "/api/select-market":
             return self._json(self.data.select_market(condition_id, side=side))
+        if parsed.path == "/api/add-topic":
+            return self._json(self.data.add_topic(str(payload.get("query") or "")))
+        if parsed.path == "/api/get-new-topics":
+            return self._json(self.data.get_new_topics(int(payload.get("cap") or 100)))
         if parsed.path == "/api/create-account":
             return self._json(self.data.create_account(str(payload.get("name") or "")))
         if parsed.path == "/api/login":
@@ -1855,6 +2360,53 @@ def _iso(value: object) -> str | None:
         return value.isoformat()
     return str(value)
 
+
+def _market_row(row: tuple, tracked: set[str]) -> dict:
+    return {
+        "condition_id": row[0],
+        "event_id": row[1] or row[0],
+        "question": row[2],
+        "category": row[3] or "Uncategorized",
+        "neg_risk": bool(row[4]),
+        "token_yes_id": row[5] or "",
+        "token_no_id": row[6] or "",
+        "close_time": _iso(row[7]),
+        "volume_24h": float(row[8] or 0),
+        "liquidity": float(row[9] or 0),
+        "active": bool(row[10]),
+        "slug": row[11] or "",
+        "description": row[12] or "",
+        "resolution_text": row[13] or "",
+        "created_time": _iso(row[14]),
+        "outcomes": _json_list(row[15]),
+        "outcome_prices": _json_float_list(row[16]),
+        "tracked": row[0] in tracked,
+    }
+
+
+def _market_meta_row(market: MarketMeta, tracked: set[str]) -> dict:
+    return {
+        "condition_id": market.condition_id,
+        "event_id": market.event_id or market.condition_id,
+        "question": market.question,
+        "category": market.category or "Uncategorized",
+        "neg_risk": bool(market.neg_risk),
+        "token_yes_id": market.token_yes_id or "",
+        "token_no_id": market.token_no_id or "",
+        "close_time": _iso(market.close_time),
+        "volume_24h": float(market.volume_24h or 0),
+        "liquidity": float(market.liquidity or 0),
+        "active": bool(market.active),
+        "slug": market.slug or "",
+        "description": market.description or "",
+        "resolution_text": market.resolution_text or "",
+        "created_time": _iso(market.created_time),
+        "outcomes": market.outcomes,
+        "outcome_prices": market.outcome_prices,
+        "tracked": market.condition_id in tracked,
+    }
+
+
 def _parse_iso(value: object) -> datetime | None:
     if value is None:
         return None
@@ -1864,6 +2416,13 @@ def _parse_iso(value: object) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _is_past_date(value: object) -> bool:
+    parsed = _parse_iso(value)
+    if parsed is None:
+        return False
+    return parsed.date() < datetime.now().date()
 
 
 def _side(value: object) -> str:
