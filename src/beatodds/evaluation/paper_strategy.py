@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from beatodds.data.clob_client import ClobReadClient
 from beatodds.evaluation.paper_store import load_paper_account, load_paper_positions
 
 
@@ -30,13 +31,54 @@ def account_money_snapshot(account_id: str) -> dict[str, Any]:
     account = load_paper_account(account_id)
     positions = load_paper_positions(account_id) if account else []
     open_cost_basis = sum(position.cost_basis + position.fees_paid for position in positions)
+    open_marked_value, marked_count = _open_marked_value(positions)
+    marked_total_money = (
+        float(account.cash_balance or 0)
+        + float(account.reserved_cash or 0)
+        + open_marked_value
+        if account else None
+    )
     return {
         "account_id": account_id,
         "cash_balance": account.cash_balance if account else None,
         "reserved_cash": account.reserved_cash if account else None,
         "open_position_count": len(positions),
         "open_cost_basis": open_cost_basis,
+        "open_marked_value": open_marked_value,
+        "open_marked_pnl": open_marked_value - open_cost_basis,
+        "open_marked_count": marked_count,
+        "total_marked_money": marked_total_money,
     }
+
+
+def _open_marked_value(positions: list[Any]) -> tuple[float, int]:
+    if not positions:
+        return 0.0, 0
+    try:
+        clob = ClobReadClient()
+    except Exception:
+        return (
+            sum(position.cost_basis + position.fees_paid for position in positions),
+            0,
+        )
+    value = 0.0
+    marked_count = 0
+    bid_cache: dict[str, float | None] = {}
+    for position in positions:
+        token_id = str(getattr(position, "token_id", "") or "")
+        bid = bid_cache.get(token_id)
+        if token_id and token_id not in bid_cache:
+            try:
+                bid, _ = best_bid_ask(clob.get_order_book(token_id))
+            except Exception:
+                bid = None
+            bid_cache[token_id] = bid
+        if bid is None:
+            value += position.cost_basis + position.fees_paid
+            continue
+        value += float(position.shares or 0) * bid
+        marked_count += 1
+    return value, marked_count
 
 
 def level_price(level: Any) -> float | None:

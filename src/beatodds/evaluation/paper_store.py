@@ -327,6 +327,66 @@ def load_paper_accounts(limit: int = 50) -> list[PaperAccount]:
     return [_account_from_row(row) for row in rows]
 
 
+def delete_paper_account(account_id: str) -> dict[str, int | bool | str]:
+    """Delete one local paper account and all formal paper ledger rows for it."""
+    if not account_id:
+        raise ValueError("account_id is required")
+    conn = _connect()
+    existing = conn.execute(
+        "SELECT account_id FROM paper_accounts WHERE account_id = ?",
+        [account_id],
+    ).fetchone()
+    if existing is None:
+        conn.close()
+        return {
+            "account_id": account_id,
+            "deleted": False,
+            "paper_fills": 0,
+            "paper_orders": 0,
+            "paper_positions": 0,
+            "paper_account_transactions": 0,
+            "paper_accounts": 0,
+        }
+
+    counts = {
+        "paper_fills": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM paper_fills WHERE account_id = ?",
+                [account_id],
+            ).fetchone()[0]
+        ),
+        "paper_orders": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM paper_orders WHERE account_id = ?",
+                [account_id],
+            ).fetchone()[0]
+        ),
+        "paper_positions": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM paper_positions WHERE account_id = ?",
+                [account_id],
+            ).fetchone()[0]
+        ),
+        "paper_account_transactions": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM paper_account_transactions WHERE account_id = ?",
+                [account_id],
+            ).fetchone()[0]
+        ),
+        "paper_accounts": 1,
+    }
+    for table in (
+        "paper_fills",
+        "paper_orders",
+        "paper_positions",
+        "paper_account_transactions",
+        "paper_accounts",
+    ):
+        conn.execute(f"DELETE FROM {table} WHERE account_id = ?", [account_id])
+    conn.close()
+    return {"account_id": account_id, "deleted": True, **counts}
+
+
 def update_risk_params(
     account_id: str = DEFAULT_ACCOUNT_ID,
     *,

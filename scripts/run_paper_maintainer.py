@@ -30,6 +30,7 @@ from beatodds.evaluation.paper_strategy import (
     account_money_snapshot,
     append_jsonl,
     ask_levels,
+    best_bid_ask,
     now_utc,
     position_exposure,
     sell_estimate,
@@ -55,6 +56,16 @@ SPORTS_KEYWORDS = [
 ]
 
 
+def _money_summary(money: dict) -> str:
+    hold_value = float(money.get("open_marked_value") or money.get("open_cost_basis") or 0)
+    hold_pnl = float(money.get("open_marked_pnl") or 0)
+    return (
+        f"cash=${float(money.get('cash_balance') or 0):.2f} "
+        f"hold_value=${hold_value:.2f} hold_pnl=${hold_pnl:+.2f} "
+        f"positions={int(money.get('open_position_count') or 0)}"
+    )
+
+
 def _is_sports(question: str, category: str) -> bool:
     text = f"{question} {category}".lower()
     return "sport" in category.lower() or any(keyword in text for keyword in SPORTS_KEYWORDS)
@@ -69,6 +80,7 @@ def _strategy_params(args) -> dict:
         "max_category_exposure", "max_total_exposure", "min_cash_buffer",
         "fee_rate_bps", "slippage_bps", "sell_min_return", "sell_min_score",
         "sell_max_loss", "sell_fraction", "sell_all_eligible",
+        "manual_sell_all", "manual_sell_position",
     ]
     return {key: getattr(args, key) for key in keys}
 
@@ -345,6 +357,144 @@ def _sell_phase(args, run_id: str, strategy_params: dict) -> tuple[int, float, f
     return sold, earned, realized_pnl
 
 
+def _manual_sell_targets(args) -> set[tuple[str, str]]:
+    targets: set[tuple[str, str]] = set()
+    for raw_target in args.manual_sell_position or []:
+        value = str(raw_target or "").strip()
+        if not value:
+            continue
+        if ":" in value:
+            condition_id, side = value.rsplit(":", 1)
+        else:
+            condition_id, side = value, ""
+        condition_id = condition_id.strip()
+        side = side.strip().upper()
+        if not condition_id:
+            continue
+        if side and side not in {"YES", "NO"}:
+            raise ValueError(f"manual sell side must be YES or NO: {raw_target}")
+        targets.add((condition_id, side))
+    return targets
+
+
+def _manual_sell_phase(args, run_id: str, strategy_params: dict) -> tuple[int, float, float]:
+    targets = _manual_sell_targets(args)
+    positions = load_paper_positions(args.account_id)
+    if not args.manual_sell_all:
+        positions = [
+            position for position in positions
+            if (position.condition_id, position.side) in targets
+            or (position.condition_id, "") in targets
+        ]
+    clob = ClobReadClient()
+    sold = 0
+    earned = 0.0
+    realized_pnl = 0.0
+    for position in positions:
+        row = {
+            "type": "strategy_decision",
+            "run_id": run_id,
+            "created_at": now_utc(),
+            "phase": "manual_sell",
+            "account_id": args.account_id,
+            "condition_id": position.condition_id,
+            "event_id": position.event_id,
+            "category": position.category,
+            "question": position.question,
+            "side": position.side,
+            "token_id": position.token_id,
+            "strategy": "manual_exit",
+            "params": strategy_params,
+            "money_before": account_money_snapshot(args.account_id),
+        }
+        try:
+            book = clob.get_order_book(position.token_id)
+            current_bid, _ = best_bid_ask(book)
+        except Exception as exc:
+            current_bid = None
+            row.update({"action": "hold", "reason": f"CLOB bid request failed: {exc}"})
+            _record_strategy_decision(args, row)
+            continue
+        if current_bid is None or current_bid <= 0:
+            row.update({"action": "hold", "reason": "no live bid for held token"})
+            _record_strategy_decision(args, row)
+            continue
+        shares_to_sell = round(position.shares * args.sell_fraction, 8)
+        estimate = sell_estimate(
+            shares=shares_to_sell,
+            price=current_bid,
+            position_shares=position.shares,
+            position_cost_basis=position.cost_basis,
+            position_fees_paid=position.fees_paid,
+            fee_rate_bps=args.fee_rate_bps,
+        )
+        row.update({
+            "action": "manual_sell_dry_run" if args.dry_run else "manual_sell",
+            "reason": "manual sell selected holding",
+            "current_bid": current_bid,
+            "shares_to_sell": shares_to_sell,
+            **estimate,
+        })
+        if not args.dry_run:
+            order = record_paper_sell(
+                account_id=args.account_id,
+                run_id=run_id,
+                condition_id=position.condition_id,
+                token_id=position.token_id,
+                side=position.side,
+                shares=shares_to_sell,
+                price=current_bid,
+                event_id=position.event_id,
+                category=position.category,
+                question=position.question,
+                fee_rate_bps=args.fee_rate_bps,
+                decision_reason="manual maintainer sell",
+            )
+            row["order_id"] = order.order_id
+            _append_decision_log(args, {
+                "type": "decision",
+                "run_id": run_id,
+                "created_at": now_utc(),
+                "account_id": args.account_id,
+                "condition_id": position.condition_id,
+                "event_id": position.event_id,
+                "category": position.category,
+                "question": position.question,
+                "action": "sell",
+                "order_id": order.order_id,
+                "status": order.status,
+                "side": position.side,
+                "token_id": position.token_id,
+                "filled_notional": order.filled_notional,
+                "filled_shares": order.filled_shares,
+                "avg_price": order.avg_price,
+                "fee": order.fee,
+                "realized_pnl": estimate["realized_pnl"],
+                "cash_earned": estimate["net_proceeds"],
+                "reason": "manual maintainer sell",
+            })
+            sold += 1
+            earned += estimate["net_proceeds"]
+            realized_pnl += estimate["realized_pnl"]
+        row["money_after"] = account_money_snapshot(args.account_id)
+        _record_strategy_decision(args, row)
+    if not positions:
+        _record_strategy_decision(args, {
+            "type": "strategy_decision",
+            "run_id": run_id,
+            "created_at": now_utc(),
+            "phase": "manual_sell",
+            "account_id": args.account_id,
+            "action": "hold",
+            "reason": "no matching open positions selected",
+            "strategy": "manual_exit",
+            "params": strategy_params,
+            "money_before": account_money_snapshot(args.account_id),
+            "money_after": account_money_snapshot(args.account_id),
+        })
+    return sold, earned, realized_pnl
+
+
 def _buy_phase(args, run_id: str, strategy_params: dict) -> tuple[int, list[EvalRecord]]:
     scanner = Scanner(market_limit=args.scan_limit)
     candidates = scanner.scan()
@@ -585,14 +735,30 @@ def _parse_args():
     parser.add_argument("--sell-max-loss", type=float, default=-0.20)
     parser.add_argument("--sell-fraction", type=float, default=1.0)
     parser.add_argument("--sell-all-eligible", action="store_true", default=True)
+    parser.add_argument("--manual-sell", action="store_true")
+    parser.add_argument("--manual-sell-all", action="store_true")
+    parser.add_argument(
+        "--manual-sell-position",
+        action="append",
+        default=[],
+        help="Open holding to sell as condition_id:SIDE. May be repeated.",
+    )
     parser.add_argument("--evidence-results-per-query", type=int, default=6)
     parser.add_argument("--forecast-evidence-items", type=int, default=12)
     parser.add_argument("--forecast-max-tokens", type=int, default=512)
     args = parser.parse_args()
+    if (args.manual_sell_all or args.manual_sell_position) and not args.manual_sell:
+        args.manual_sell = True
     if args.sell_only and args.buy_only:
         parser.error("choose only one of --sell-only or --buy-only")
     if args.init_only and (args.sell_only or args.buy_only):
         parser.error("--init-only cannot be combined with --sell-only or --buy-only")
+    if args.manual_sell and (args.sell_only or args.buy_only or args.init_only):
+        parser.error(
+            "--manual-sell cannot be combined with --sell-only, --buy-only, or --init-only"
+        )
+    if args.manual_sell and not args.manual_sell_all and not args.manual_sell_position:
+        parser.error("--manual-sell requires --manual-sell-all or --manual-sell-position")
     if args.sell_fraction <= 0 or args.sell_fraction > 1:
         parser.error("--sell-fraction must be in (0, 1]")
     return args
@@ -633,10 +799,29 @@ def main() -> None:
             "init_only": True,
             "money": money,
         })
+        print(f"account initialized. {_money_summary(money)}")
+        return
+    if args.manual_sell:
+        sold, earned, realized_pnl = _manual_sell_phase(args, run_id, strategy_params)
+        money = account_money_snapshot(args.account_id)
+        append_jsonl(args.strategy_log_path, {
+            "type": "strategy_run_end",
+            "run_id": run_id,
+            "created_at": datetime.now().astimezone(),
+            "account_id": args.account_id,
+            "strategy": "wise_maintainer",
+            "manual_sell": True,
+            "sold": sold,
+            "cash_earned": earned,
+            "realized_pnl": realized_pnl,
+            "buys": 0,
+            "money": money,
+        })
         print(
-            f"account initialized. cash=${float(money['cash_balance'] or 0):.2f} "
-            f"open_cost=${money['open_cost_basis']:.2f}"
+            f"manual sell: sold={sold} earned=${earned:.2f} "
+            f"realized_pnl=${realized_pnl:.2f}"
         )
+        print(f"done. {_money_summary(money)}")
         return
     if not args.buy_only:
         sold, earned, realized_pnl = _sell_phase(args, run_id, strategy_params)
@@ -659,10 +844,7 @@ def main() -> None:
         "buys": buys,
         "money": money,
     })
-    print(
-        f"done. cash=${float(money['cash_balance'] or 0):.2f} "
-        f"open_cost=${money['open_cost_basis']:.2f} positions={money['open_position_count']}"
-    )
+    print(f"done. {_money_summary(money)}")
 
 
 if __name__ == "__main__":

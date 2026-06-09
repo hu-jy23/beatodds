@@ -3,6 +3,7 @@ from beatodds.evaluation.paper_store import (
     DEFAULT_ACCOUNT_ID,
     account_summary,
     create_paper_account,
+    delete_paper_account,
     deposit_cash,
     ensure_default_paper_account,
     load_account_transactions,
@@ -140,6 +141,49 @@ def test_paper_account_rejects_negative_balances(tmp_path, monkeypatch) -> None:
     assert loaded is not None
     assert loaded.cash_balance == 50.0
     assert loaded.reserved_cash == 50.0
+
+    config_module._settings = None
+
+
+def test_delete_paper_account_removes_local_ledger_rows(tmp_path, monkeypatch) -> None:
+    _reset_settings(tmp_path, monkeypatch)
+    create_paper_account(account_id="delete-me", name="Delete Me", initial_cash=100.0)
+    record_paper_buy(
+        account_id="delete-me",
+        run_id="run",
+        condition_id="0xabc",
+        event_id="event",
+        category="Test",
+        question="Will test pass?",
+        token_id="token",
+        side="YES",
+        requested_notional=10.0,
+        fill_levels=[(0.5, 20.0)],
+        p_m_yes=0.5,
+        p_f_yes=0.6,
+        side_fair_prob=0.6,
+        gross_edge=0.1,
+        net_edge=0.08,
+        confidence=0.5,
+        fee_rate_bps=100.0,
+        decision_reason="test",
+    )
+
+    result = delete_paper_account("delete-me")
+
+    assert result["deleted"] is True
+    assert result["paper_accounts"] == 1
+    assert result["paper_orders"] == 1
+    assert result["paper_fills"] == 1
+    assert result["paper_positions"] == 1
+    assert result["paper_account_transactions"] == 2
+    assert load_paper_account("delete-me") is None
+    assert load_paper_orders("delete-me") == []
+    assert load_paper_positions("delete-me") == []
+    assert load_account_transactions("delete-me") == []
+
+    missing = delete_paper_account("delete-me")
+    assert missing["deleted"] is False
 
     config_module._settings = None
 

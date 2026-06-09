@@ -27,6 +27,7 @@ from beatodds.data.clob_client import ClobReadClient
 from beatodds.data.gamma_client import GammaClient
 from beatodds.evaluation.paper_store import (
     create_paper_account,
+    delete_paper_account,
     deposit_cash,
     ensure_default_paper_account,
     load_account_transactions,
@@ -75,7 +76,7 @@ class GuiStore:
     def load(self) -> GuiState:
         with self._lock:
             if not self.path.exists():
-                return GuiState([], None, None, None, "YES", None, [], [], [], [], [], [], 0)
+                return GuiState([], None, None, None, "YES", None, [], [], [], [], [], [], [], 0)
             data = json.loads(self.path.read_text(encoding="utf-8"))
             selected_market_id = data.get("selected_market_id") or data.get("selected_id")
             return GuiState(
@@ -229,7 +230,11 @@ class GuiData:
             "tracked": row[0] in set(self.store.load().tracked_ids),
         }
 
-    def state_payload(self, include_live: bool = False) -> dict:
+    def state_payload(
+        self,
+        include_live: bool = False,
+        include_account_marks: bool = False,
+    ) -> dict:
         state = self.store.load()
         markets = self.markets(limit=800)
         events = self.events(markets)
@@ -274,7 +279,7 @@ class GuiData:
             state.selected_id = selected_market_id
             self.store.save(state)
 
-        account_context = self.account_context()
+        account_context = self.account_context(include_marks=include_account_marks)
         state = self.store.load()
         return {
             "state": asdict(state),
@@ -303,13 +308,13 @@ class GuiData:
             return events
         return [selected_event, *events]
 
-    def account_context(self) -> dict:
+    def account_context(self, include_marks: bool = False) -> dict:
         state = self.store.load()
         account = self._selected_account(state)
         accounts = load_paper_accounts(limit=30)
         if account.account_id not in {item.account_id for item in accounts}:
             accounts.insert(0, account)
-        activity = self._account_activity(account.account_id)
+        activity = self._account_activity(account.account_id, include_marks=include_marks)
         return {
             "selected_account_id": account.account_id,
             "selected_account": _paper_account_dict(account),
@@ -321,6 +326,7 @@ class GuiData:
             "trade_records": activity["trade_records"],
             "trade_event_groups": activity["trade_event_groups"],
             "earning_points": activity["earning_points"],
+            "eval_curves": self._paper_eval_curves(),
             "maintainer": self.maintainer_context(account.account_id),
             "user_stats": activity["user_stats"],
         }
@@ -351,6 +357,22 @@ class GuiData:
         state.selected_account_id = account_id
         self.store.save(state)
         return self.state_payload()
+
+    def delete_account(self, account_id: str) -> dict:
+        if not load_paper_account(account_id):
+            raise ValueError(f"paper account not found: {account_id}")
+        result = delete_paper_account(account_id)
+        state = self.store.load()
+        if state.selected_account_id == account_id:
+            accounts = load_paper_accounts(limit=1)
+            if accounts:
+                state.selected_account_id = accounts[0].account_id
+            else:
+                state.selected_account_id = ensure_default_paper_account().account_id
+        self.store.save(state)
+        payload = self.state_payload()
+        payload["account_delete_result"] = result
+        return payload
 
     def update_account_config(self, payload: dict) -> dict:
         state = self.store.load()
@@ -454,8 +476,8 @@ class GuiData:
         dry_run = bool(payload.get("dry_run", False))
         if action == "update":
             return self.state_payload()
-        if action not in {"sell", "purchase", "maintain"}:
-            raise ValueError("action must be update, sell, purchase, or maintain")
+        if action not in {"sell", "purchase", "maintain", "manual_sell"}:
+            raise ValueError("action must be update, sell, purchase, maintain, or manual_sell")
         cmd = [
             sys.executable,
             "-u",
@@ -467,6 +489,23 @@ class GuiData:
             cmd.append("--sell-only")
         elif action == "purchase":
             cmd.append("--buy-only")
+        elif action == "manual_sell":
+            cmd.append("--manual-sell")
+            sell_fraction = max(0.0, min(_payload_float(payload, "sell_fraction", 1.0), 1.0))
+            cmd.extend(["--sell-fraction", str(sell_fraction or 1.0)])
+            if bool(payload.get("all_positions", False)):
+                cmd.append("--manual-sell-all")
+            else:
+                positions = payload.get("positions") or []
+                if not isinstance(positions, list) or not positions:
+                    raise ValueError("manual sell requires selected positions or all_positions")
+                for position in positions:
+                    if not isinstance(position, dict):
+                        continue
+                    condition_id = str(position.get("condition_id") or "").strip()
+                    side = _side(position.get("side"))
+                    if condition_id:
+                        cmd.extend(["--manual-sell-position", f"{condition_id}:{side}"])
         if dry_run:
             cmd.append("--dry-run")
         started = datetime.now(timezone.utc)
@@ -534,7 +573,7 @@ class GuiData:
             raise RuntimeError(message)
         return self.state_payload()
 
-    def _account_activity(self, account_id: str) -> dict:
+    def _account_activity(self, account_id: str, include_marks: bool = False) -> dict:
         account = load_paper_account(account_id)
         transactions = [
             _paper_transaction_dict(item)
@@ -557,23 +596,56 @@ class GuiData:
             )
             for item in load_paper_positions(account_id)
         ]
+        if include_marks:
+            self._attach_position_marks(positions)
+        else:
+            self._attach_position_cost_fallbacks(positions)
         trade_records = [
             _paper_order_dict(item)
             for item in orders
         ]
         open_cost = sum(float(item.get("notional") or 0) for item in positions)
+        marked_share_value = sum(
+            float(item.get("current_value") or item.get("notional") or 0)
+            for item in positions
+        )
+        marked_position_count = sum(1 for item in positions if item.get("current_bid") is not None)
         initial_cash = float(account.initial_cash if account else 0)
+        cash_balance = float(account.cash_balance if account else 0)
+        reserved_cash = float(account.reserved_cash if account else 0)
+        share_hold_cost = open_cost
+        projected_share_value = marked_share_value
+        marked_open_pnl = projected_share_value - share_hold_cost
+        total_account_money = cash_balance + reserved_cash + projected_share_value
+        total_earn_loss = total_account_money - initial_cash
         nav_points = [
             {
                 "at": item["created_at"],
-                "nav": round(item["cash_after"] + item["reserved_after"] + open_cost, 8),
-                "pnl": round(
-                    item["cash_after"] + item["reserved_after"] + open_cost - initial_cash,
+                "nav": round(
+                    item["cash_after"] + item["reserved_after"] + share_hold_cost,
                     8,
                 ),
+                "pnl": round(
+                    item["cash_after"]
+                    + item["reserved_after"]
+                    + share_hold_cost
+                    - initial_cash,
+                    8,
+                ),
+                "source": "ledger_cost",
             }
             for item in reversed(transactions)
         ]
+        if account:
+            nav_points.append({
+                "at": _now(),
+                "nav": round(total_account_money, 8),
+                "pnl": round(total_earn_loss, 8),
+                "source": "live_hold_mark" if include_marks else "cost_basis",
+                "share_hold_value": round(projected_share_value, 8),
+                "share_hold_pnl": round(marked_open_pnl, 8),
+                "marked_count": marked_position_count,
+            })
         earning_points = nav_points
         event_position_groups = _event_groups(positions)
         event_trade_groups = _event_groups(trade_records)
@@ -582,28 +654,21 @@ class GuiData:
             for item in positions
             if item.get("estimated_pnl") is not None
         )
-        share_hold_cost = open_cost
-        projected_share_value = share_hold_cost + projected_open_pnl
-        cash_balance = float(account.cash_balance if account else 0)
-        reserved_cash = float(account.reserved_cash if account else 0)
-        total_account_money = cash_balance + reserved_cash + projected_share_value
-        total_earn_loss = total_account_money - initial_cash
         realized_pnl = sum(
             float(item.get("cash_delta") or 0)
             for item in transactions
             if item.get("transaction_type") == "trade" and float(item.get("cash_delta") or 0) > 0
         )
-        latest_nav = (
-            nav_points[-1]["nav"]
-            if nav_points else
-            (account.cash_balance if account else 0.0)
-        )
+        latest_nav = total_account_money if account else 0.0
         user_stats = {
             "trade_count": len(trade_records),
             "position_count": len(positions),
             "estimated_pnl": round(projected_open_pnl, 8),
             "realized_pnl": round(realized_pnl, 8),
             "open_cost_basis": round(open_cost, 8),
+            "open_marked_value": round(marked_share_value, 8),
+            "open_marked_pnl": round(marked_open_pnl, 8),
+            "open_marked_count": marked_position_count,
             "cash_balance": round(cash_balance, 8),
             "reserved_cash": round(reserved_cash, 8),
             "share_hold_cost": round(share_hold_cost, 8),
@@ -624,6 +689,155 @@ class GuiData:
             "trade_event_groups": event_trade_groups,
             "user_stats": user_stats,
         }
+
+    def _paper_eval_curves(self) -> list[dict]:
+        configs = [
+            {
+                "account_id": "paper-live-1000",
+                "label": "BeatOdds Live $1000 Paper Account",
+                "report_dir": self.cfg.data_dir / "report_live_1000",
+                "log_path": self.cfg.data_dir / "paper_decisions.jsonl",
+                "command": (
+                    "uv run scripts/run_paper_eval.py --account-id paper-live-1000 "
+                    "--top-k 5 --report-dir data/report_live_1000"
+                ),
+                "top_k": 5,
+            },
+            {
+                "account_id": "paper-self-1000",
+                "label": "paper-self-1000",
+                "report_dir": self.cfg.data_dir / "report_self_1000",
+                "log_path": self.cfg.data_dir / "paper_decisions_self.jsonl",
+                "command": (
+                    "uv run scripts/run_paper_eval.py --account-id paper-self-1000 "
+                    "--top-k 5 --log-path data/paper_decisions_self.jsonl "
+                    "--report-dir data/report_self_1000"
+                ),
+                "top_k": 5,
+            },
+        ]
+        return [self._paper_eval_curve(config) for config in configs]
+
+    def _paper_eval_curve(self, config: dict) -> dict:
+        report_dir = Path(config["report_dir"])
+        points = self._paper_eval_report_points(
+            report_dir,
+            account_id=str(config["account_id"]),
+            top_k=int(config["top_k"]),
+        )
+        fallback_used = False
+        if not points:
+            points = self._paper_eval_report_points(
+                report_dir,
+                account_id=str(config["account_id"]),
+                top_k=None,
+            )
+            fallback_used = bool(points)
+        latest = points[-1] if points else None
+        return {
+            "account_id": config["account_id"],
+            "label": config["label"],
+            "report_dir": str(report_dir),
+            "log_path": str(config["log_path"]),
+            "command": config["command"],
+            "top_k": config["top_k"],
+            "fallback_used": fallback_used,
+            "points": points,
+            "latest": latest,
+            "status": (
+                f"{len(points)} report points"
+                if points else
+                f"No JSON reports found in {report_dir}"
+            ),
+        }
+
+    def _paper_eval_report_points(
+        self,
+        report_dir: Path,
+        *,
+        account_id: str,
+        top_k: int | None,
+    ) -> list[dict]:
+        if not report_dir.exists():
+            return []
+        points_by_time: dict[str, dict] = {}
+        for path in sorted(report_dir.glob("*.json")):
+            if path.name == "paper_eval_latest.json":
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if data.get("account_id") != account_id:
+                continue
+            if top_k is not None and data.get("top_k") != top_k:
+                continue
+            summary = data.get("summary") or {}
+            generated_at = str(data.get("generated_at") or "")
+            if not generated_at:
+                continue
+            point = {
+                "at": generated_at,
+                "pnl": round(float(summary.get("pnl") or 0), 8),
+                "nav": round(1000.0 + float(summary.get("pnl") or 0), 8),
+                "invested": round(float(summary.get("invested") or 0), 8),
+                "current_value": round(float(summary.get("current_value") or 0), 8),
+                "return_pct": round(float(summary.get("return_pct") or 0), 8),
+                "selected": int(summary.get("selected") or 0),
+                "marked": int(summary.get("marked") or 0),
+                "unmarked": int(summary.get("unmarked") or 0),
+                "winners": int(summary.get("winners") or 0),
+                "losers": int(summary.get("losers") or 0),
+                "top_k": data.get("top_k"),
+                "selector": data.get("selector") or "",
+                "report_path": str(path),
+            }
+            points_by_time[generated_at] = point
+        return sorted(points_by_time.values(), key=lambda item: item["at"])
+
+    def _attach_position_marks(self, positions: list[dict]) -> None:
+        if not positions:
+            return
+        client = ClobReadClient()
+        mark_cache: dict[str, float | None] = {}
+        for position in positions:
+            token_id = str(position.get("token_id") or "")
+            current_bid = mark_cache.get(token_id)
+            if token_id and token_id not in mark_cache:
+                current_bid = self._live_token_bid(client, token_id)
+                mark_cache[token_id] = current_bid
+            shares = float(position.get("shares") or 0)
+            cost = float(position.get("notional") or 0)
+            if current_bid is None:
+                position["current_bid"] = None
+                position["current_value"] = round(cost, 8)
+                position["current_pnl"] = None
+                position["mark_source"] = "cost_fallback"
+                continue
+            current_value = shares * current_bid
+            position["current_bid"] = round(current_bid, 8)
+            position["current_value"] = round(current_value, 8)
+            position["current_pnl"] = round(current_value - cost, 8)
+            position["mark_source"] = "live_bid"
+
+    def _attach_position_cost_fallbacks(self, positions: list[dict]) -> None:
+        for position in positions:
+            cost = float(position.get("notional") or 0)
+            position["current_bid"] = None
+            position["current_value"] = round(cost, 8)
+            position["current_pnl"] = None
+            position["mark_source"] = "pending_live_mark"
+
+    def _live_token_bid(self, client: ClobReadClient, token_id: str) -> float | None:
+        try:
+            book = client.get_order_book(token_id)
+        except Exception as exc:
+            logger.debug(f"Could not fetch live share-hold bid for token {token_id}: {exc}")
+            return None
+        bids = _book_levels((book or {}).get("bids") or [])
+        if not bids:
+            return None
+        return bids[0]["price"]
 
     def _enrich_trade_record(self, deal: dict) -> dict:
         condition_id = deal.get("condition_id") or ""
@@ -818,7 +1032,10 @@ class GuiData:
         event = next((e for e in events if e["event_id"] == event_id), None)
         event_markets = self.markets(limit=200, event_id=event_id)
         if event is None and event_markets:
-            event = self.events(event_markets)[0]
+            derived_events = self.events(event_markets)
+            event = derived_events[0] if derived_events else None
+        if event is None:
+            event = self._event_shell(event_id, event_markets)
         if event is None:
             return None
 
@@ -865,6 +1082,53 @@ class GuiData:
             "forecast_confidence": (
                 dominant.get("confidence") if dominant else event.get("forecast_confidence", 0.0)
             ),
+        }
+
+    def _event_shell(self, event_id: str, event_markets: list[dict]) -> dict | None:
+        event_meta = self._event_meta().get(event_id, {})
+        primary_market = event_markets[0] if event_markets else {}
+        if not event_meta and not primary_market:
+            return None
+        return {
+            "event_id": event_id,
+            "title": event_meta.get("title") or primary_market.get("question") or event_id,
+            "slug": event_meta.get("slug") or primary_market.get("slug") or "",
+            "category": (
+                event_meta.get("category")
+                or primary_market.get("category")
+                or "Uncategorized"
+            ),
+            "tags": event_meta.get("tags") or [],
+            "description": (
+                event_meta.get("description")
+                or primary_market.get("description")
+                or primary_market.get("resolution_text")
+                or ""
+            ),
+            "image": event_meta.get("image") or "",
+            "icon": event_meta.get("icon") or event_meta.get("image") or "",
+            "end_time": event_meta.get("end_time") or primary_market.get("close_time"),
+            "volume_24h": float(
+                event_meta.get("volume_24h")
+                or primary_market.get("volume_24h")
+                or 0
+            ),
+            "liquidity": float(
+                event_meta.get("liquidity")
+                or primary_market.get("liquidity")
+                or 0
+            ),
+            "market_count": len(event_markets),
+            "neg_risk_count": sum(1 for market in event_markets if market.get("neg_risk")),
+            "tracked_count": sum(1 for market in event_markets if market.get("tracked")),
+            "edge_count": 0,
+            "max_abs_edge": 0.0,
+            "avg_abs_edge": 0.0,
+            "forecast_direction": "observe",
+            "forecast_edge": 0.0,
+            "forecast_confidence": 0.0,
+            "active": bool(event_meta.get("active", primary_market.get("active", False))),
+            "top_markets": event_markets[:4],
         }
 
     def market_detail(
@@ -2253,7 +2517,15 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             return self._file("index.html")
         if parsed.path == "/api/state":
-            return self._json(self.data.state_payload())
+            query = parse_qs(parsed.query)
+            include_account_marks = query.get("account_marks", ["0"])[0] in {"1", "true"}
+            return self._json(
+                self.data.state_payload(include_account_marks=include_account_marks)
+            )
+        if parsed.path == "/api/account-context":
+            return self._json({
+                "account_context": self.data.account_context(include_marks=True),
+            })
         if parsed.path.startswith("/api/market/"):
             condition_id = unquote(parsed.path.removeprefix("/api/market/"))
             side = parse_qs(parsed.query).get("side", [None])[0]
@@ -2292,6 +2564,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.data.create_account(str(payload.get("name") or "")))
         if parsed.path == "/api/login":
             return self._json(self.data.login_account(str(payload.get("account_id") or "")))
+        if parsed.path == "/api/delete-account":
+            return self._json(self.data.delete_account(str(payload.get("account_id") or "")))
         if parsed.path == "/api/account-config":
             return self._json(self.data.update_account_config(payload))
         if parsed.path == "/api/account-profile":
@@ -2489,7 +2763,7 @@ def _paper_order_dict(order) -> dict:
     pnl_label = "unmarked"
     if order.action == "buy" and order.net_edge:
         estimated_pnl = order.filled_shares * order.net_edge
-        pnl_label = "projected edge PnL"
+        pnl_label = "expected edge"
     return {
         "event_id": order.event_id or order.condition_id,
         "event_title": order.question or order.condition_id,
@@ -2575,10 +2849,14 @@ def _maintainer_console_logs(actions: list[dict], strategy_rows: list[dict]) -> 
         row_type = row.get("type") or "strategy"
         if row_type == "strategy_run_start":
             money = row.get("money") or {}
+            hold_value = float(
+                money.get("open_marked_value") or money.get("open_cost_basis") or 0
+            )
             summary = (
                 f"PAPER MAINTAINER RUN {row.get('run_id') or ''} "
                 f"cash=${float(money.get('cash_balance') or 0):.2f} "
-                f"open_cost=${float(money.get('open_cost_basis') or 0):.2f}"
+                f"hold_value=${hold_value:.2f} "
+                f"pnl=${float(money.get('open_marked_pnl') or 0):+.2f}"
             )
             logs.append({
                 "at": row.get("created_at") or "",
@@ -2590,10 +2868,14 @@ def _maintainer_console_logs(actions: list[dict], strategy_rows: list[dict]) -> 
             continue
         if row_type == "strategy_run_end":
             money = row.get("money") or {}
+            hold_value = float(
+                money.get("open_marked_value") or money.get("open_cost_basis") or 0
+            )
             summary = (
                 f"done. sold={int(row.get('sold') or 0)} buys={int(row.get('buys') or 0)} "
                 f"cash=${float(money.get('cash_balance') or 0):.2f} "
-                f"open_cost=${float(money.get('open_cost_basis') or 0):.2f} "
+                f"hold_value=${hold_value:.2f} "
+                f"pnl=${float(money.get('open_marked_pnl') or 0):+.2f} "
                 f"positions={int(money.get('open_position_count') or 0)}"
             )
             logs.append({
@@ -2652,6 +2934,8 @@ def _event_groups(rows: list[dict]) -> list[dict]:
                 "estimated_pnl": None,
                 "_estimated_pnl_sum": 0.0,
                 "_estimated_pnl_count": 0,
+                "_current_pnl_sum": 0.0,
+                "_current_pnl_count": 0,
                 "rows": [],
             },
         )
@@ -2663,11 +2947,20 @@ def _event_groups(rows: list[dict]) -> list[dict]:
         if row.get("estimated_pnl") is not None:
             group["_estimated_pnl_sum"] += float(row.get("estimated_pnl") or 0)
             group["_estimated_pnl_count"] += 1
+        if row.get("current_pnl") is not None:
+            group["_current_pnl_sum"] += float(row.get("current_pnl") or 0)
+            group["_current_pnl_count"] += 1
     for group in grouped.values():
-        if group["_estimated_pnl_count"]:
+        if group["_current_pnl_count"]:
+            group["estimated_pnl"] = group["_current_pnl_sum"]
+            group["pnl_label"] = "current hold PnL"
+        elif group["_estimated_pnl_count"]:
             group["estimated_pnl"] = group["_estimated_pnl_sum"]
+            group["pnl_label"] = "expected edge"
         group.pop("_estimated_pnl_sum", None)
         group.pop("_estimated_pnl_count", None)
+        group.pop("_current_pnl_sum", None)
+        group.pop("_current_pnl_count", None)
     return sorted(grouped.values(), key=lambda item: item["event_title"])
 
 

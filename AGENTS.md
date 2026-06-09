@@ -188,6 +188,49 @@ As of 2026-05-25:
   CLI lines for each considered topic. Maintainer sizing now caps new buy
   notional against existing open topic exposure plus fees, so repeated runs
   cannot push one market beyond `max_market_exposure`.
+  As of 2026-06-08, `run_paper_maintainer.py` also supports manual exits:
+  `--manual-sell --manual-sell-position <condition_id>:YES` for selected
+  holdings and `--manual-sell-all` for all open holdings, with `--dry-run` and
+  `--sell-fraction` supported. GUI User > Maintainer renders open holdings as
+  multi-select cards with Select all, Clear, Sell selected, and Sell all holds;
+  these call `/api/maintainer-action` with `action=manual_sell` and respect the
+  GUI dry-run checkbox.
+  The User > Maintainer earning curve and account money strip now mark current
+  open share holds from live CLOB best bids where available. The curve's latest
+  PnL is `cash + reserved + current share value - initial cash`; unmarked
+  positions fall back to cost basis. Maintainer strategy money snapshots also
+  include `open_marked_value`, `open_marked_pnl`, `open_marked_count`, and
+  `total_marked_money`.
+  The User page `持仓与交易` current-hold groups also use live marked hold PnL
+  (`current_pnl`) instead of projected forecast-edge PnL when marks are
+  available, and row details show live bid/cost-fallback mark source plus
+  current hold value.
+  The historical trade-record groups intentionally show forecast-time
+  `expected edge`, not realized/current earnings; the GUI labels and muted
+  styling distinguish this from current hold PnL so expected model upside does
+  not look like earned money.
+  The Maintainer earning curve appends an explicit latest
+  `source=live_hold_mark` point using current live-bid share value and open
+  hold PnL; older transaction points remain ledger cost-basis snapshots instead
+  of being backfilled with today's live mark.
+  GUI initial `/api/state` intentionally avoids live account position marking
+  so page reload is not blocked by many CLOB order-book requests. User-page
+  live marks load through `/api/account-context` after first render, and
+  maintainer polling uses fast state snapshots with one marked refresh at the
+  end.
+  `event_detail()` must tolerate selected/stored events whose markets are all
+  filtered out of the current event list, such as past events after launch-time
+  date filtering. It now builds a minimal event shell instead of indexing into
+  an empty derived events list.
+  User > Overview now includes Eval Earning Curves for `paper-live-1000` and
+  `paper-self-1000`. These read historical JSON reports from
+  `data/report_live_1000` and `data/report_self_1000`, prefer top-5 eval
+  reports matching the documented commands, and plot report-time PnL histories
+  without re-running CLOB evaluation on every GUI load.
+  The User account list supports deleting a local paper user. Delete removes
+  the account plus formal paper account transactions, orders, fills, and
+  positions for that account; if the selected account is deleted, the GUI
+  selects another account or recreates the default demo account.
   The User page maintainer console also falls back to recent
   `paper_strategy_runs.jsonl` rows, so CLI-started maintainer runs appear in
   the GUI as terminal-style logs. The Positions/Trades page no longer renders

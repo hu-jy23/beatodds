@@ -316,6 +316,13 @@
           </div>
           <section class="detail-block user-block">
             <div class="panel-head tight">
+              <h3>Eval Earning Curves</h3>
+              <span>top-5 paper eval reports</span>
+            </div>
+            <div class="eval-curve-grid" id="evalCurveGrid"></div>
+          </section>
+          <section class="detail-block user-block">
+            <div class="panel-head tight">
               <h3>Maintainer Console</h3>
               <span id="overviewMaintainerConsoleStatus">sell / purchase / maintain</span>
             </div>
@@ -445,6 +452,12 @@
               <div class="panel-head tight">
                 <h3>Current Share Hold</h3>
                 <span id="maintainerPositionStatus">formal ledger</span>
+              </div>
+              <div class="manual-sell-toolbar">
+                <button class="btn secondary" id="manualSellSelectAllBtn">Select all</button>
+                <button class="btn secondary" id="manualSellClearBtn">Clear</button>
+                <button class="btn danger" id="manualSellSelectedBtn">Sell selected</button>
+                <button class="btn danger" id="manualSellAllBtn">Sell all holds</button>
               </div>
               <div class="position-list" id="maintainerPositionList"></div>
             </section>

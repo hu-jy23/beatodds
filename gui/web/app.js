@@ -16,6 +16,7 @@ const app = {
   userSection: localStorage.getItem("beatodds-user-section") || "overview",
   expandedPositionEvents: new Set(),
   expandedTradeEvents: new Set(),
+  selectedManualSell: new Set(),
   maintainerRunning: false,
   maintainerPoll: null,
 };
@@ -83,6 +84,11 @@ function pnlClass(value) {
   return Number(value) >= 0 ? "positive" : "negative";
 }
 
+function expectedEdgeClass(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "muted";
+  return Number(value) >= 0 ? "expected-positive" : "expected-negative";
+}
+
 function shortId(id) {
   return id ? `${id.slice(0, 10)}...${id.slice(-5)}` : "--";
 }
@@ -96,27 +102,40 @@ async function api(path, options = {}) {
   return response.json();
 }
 
-async function loadState() {
+async function loadState(options = {}) {
+  const refreshMarks = options.refreshMarks !== false;
   app.state = await api("/api/state");
   app.selectedEventId = app.state.selected_event?.event_id || app.state.state.selected_event_id;
   app.selectedMarketId = app.state.selected?.market?.condition_id || app.state.state.selected_market_id;
   app.selectedSide = app.state.selected?.side || app.state.state.selected_side || app.selectedSide || "YES";
   render();
   if (app.page === "markets") refreshSelectedMarketDetail();
+  if (refreshMarks && app.page === "user") refreshAccountMarks().catch((error) => {
+    console.warn("[BeatOdds] account mark refresh failed", error);
+  });
 }
 
 async function refreshAccountPositions(source = "positions section") {
   logControl("account positions refresh clicked", { source });
-  await loadState();
   app.page = "user";
   app.userSection = "positions";
   localStorage.setItem("beatodds-page", app.page);
   localStorage.setItem("beatodds-user-section", app.userSection);
+  await loadState({ refreshMarks: false });
+  await refreshAccountMarks();
   render();
   logControl("account positions refresh finished", {
     positions: app.state.account_context?.positions?.length || 0,
     trades: app.state.account_context?.trade_records?.length || 0,
   });
+}
+
+async function refreshAccountMarks() {
+  if (!app.state || app.page !== "user") return;
+  const payload = await api("/api/account-context");
+  if (!payload.account_context) return;
+  app.state.account_context = payload.account_context;
+  render();
 }
 
 async function post(path, payload) {
@@ -250,17 +269,30 @@ function renderAccountControls() {
   $("accountList").innerHTML = accounts.length
     ? accounts
         .map((item) => `
-          <button class="account-row ${item.account_id === account.account_id ? "active" : ""}" data-account-id="${escapeAttr(item.account_id)}">
-            <strong>${escapeHtml(item.name || item.account_id)}</strong>
-            <span>${fmtMoney(item.cash_balance)} cash · ${escapeHtml(item.sizing_mode || "all_in")} · fee ${Number(item.fee_rate_bps || 0).toFixed(0)} bps</span>
-          </button>
+          <div class="account-row ${item.account_id === account.account_id ? "active" : ""}">
+            <button class="account-select-btn" data-account-id="${escapeAttr(item.account_id)}">
+              <strong>${escapeHtml(item.name || item.account_id)}</strong>
+              <span>${fmtMoney(item.cash_balance)} cash · ${escapeHtml(item.sizing_mode || "all_in")} · fee ${Number(item.fee_rate_bps || 0).toFixed(0)} bps</span>
+            </button>
+            <button class="icon-btn danger account-delete-btn" title="Delete user" data-account-id="${escapeAttr(item.account_id)}" data-account-name="${escapeAttr(item.name || item.account_id)}">&times;</button>
+          </div>
         `)
         .join("")
     : `<div class="empty-panel">No paper users yet.</div>`;
-  document.querySelectorAll(".account-row[data-account-id]").forEach((button) => {
+  document.querySelectorAll(".account-select-btn[data-account-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       app.loginOpen = false;
       await post("/api/login", { account_id: button.dataset.accountId });
+    });
+  });
+  document.querySelectorAll(".account-delete-btn[data-account-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const accountId = button.dataset.accountId;
+      const accountName = button.dataset.accountName || accountId;
+      const ok = window.confirm(`Delete local paper user "${accountName}"?\n\nThis removes its local account ledger rows, orders, fills, and positions.`);
+      if (!ok) return;
+      logControl("delete account clicked", { accountId });
+      await post("/api/delete-account", { account_id: accountId });
     });
   });
 
@@ -283,6 +315,7 @@ function renderUserPage() {
   const trades = context.trade_records || [];
   const positionGroups = context.position_event_groups || [];
   const tradeGroups = context.trade_event_groups || [];
+  const evalCurves = context.eval_curves || [];
   const icon = account.icon_url || "";
   $("userAvatar").innerHTML = icon
     ? `<img src="${escapeAttr(icon)}" alt="" loading="lazy" />`
@@ -315,7 +348,7 @@ function renderUserPage() {
     ["Available", fmtMoney(account.available_cash), "after cash buffer"],
     ["Reserved", fmtMoney(account.reserved_cash), "open reserves"],
     ["Trades", String(stats.trade_count || 0), `${stats.position_count || 0} open positions`],
-    ["PnL", fmtSignedMoney(stats.estimated_pnl || 0), "cash + open cost basis"],
+    ["PnL", fmtSignedMoney(stats.open_marked_pnl || 0), "current holds vs cost"],
     ["Ledger rows", String(stats.transaction_count || 0), "account transactions"],
   ]
     .map(([label, value, detail]) => `
@@ -350,7 +383,11 @@ function renderUserPage() {
 
   $("accountMoneyStrip").innerHTML = [
     ["Cash", fmtMoney(stats.cash_balance ?? account.cash_balance), "available paper cash"],
-    ["Share hold", fmtMoney(stats.projected_share_value ?? stats.share_hold_cost), `${fmtMoney(stats.share_hold_cost || 0)} cost`],
+    [
+      "Share hold",
+      fmtMoney(stats.projected_share_value ?? stats.share_hold_cost),
+      `${fmtMoney(stats.share_hold_cost || 0)} cost · ${stats.open_marked_count || 0} marked`,
+    ],
     ["Total money", fmtMoney(stats.total_account_money ?? account.equity), "cash + reserved + shares"],
     ["Earn / loss", fmtMaybeSignedMoney(stats.total_earn_loss), `initial ${fmtMoney(stats.initial_cash ?? account.initial_cash)}`],
   ].map(([label, value, detail]) => `
@@ -372,7 +409,41 @@ function renderUserPage() {
     : `<div class="empty-panel">No paper trade records yet.</div>`;
 
   if (app.page === "user") drawUserNavChart($("userNavChart"), context.nav_points || []);
+  renderEvalCurves(evalCurves);
   renderMaintainerSection(context);
+}
+
+function renderEvalCurves(curves) {
+  const grid = $("evalCurveGrid");
+  if (!grid) return;
+  grid.innerHTML = curves.length
+    ? curves.map((curve, idx) => {
+      const latest = curve.latest || {};
+      const canvasId = `evalCurveCanvas${idx}`;
+      return `
+        <section class="eval-curve-card">
+          <div class="eval-curve-head">
+            <div>
+              <strong>${escapeHtml(curve.label || curve.account_id || "paper account")}</strong>
+              <small>${escapeHtml(curve.status || "")}</small>
+            </div>
+            <b class="${pnlClass(latest.pnl)}">${fmtMaybeSignedMoney(latest.pnl)}</b>
+          </div>
+          <canvas id="${canvasId}" width="520" height="180"></canvas>
+          <div class="eval-curve-meta">
+            <span>${escapeHtml(latest.at ? new Date(latest.at).toLocaleString() : "No reports yet")}</span>
+            <span>${fmtMoney(latest.current_value || 0)} value / ${fmtMoney(latest.invested || 0)} invested</span>
+            <span>${Number(latest.marked || 0)} marked · ${Number(latest.unmarked || 0)} unmarked</span>
+          </div>
+          <code>${escapeHtml(curve.command || "")}</code>
+        </section>
+      `;
+    }).join("")
+    : `<div class="empty-panel">No paper eval report folders found.</div>`;
+  curves.forEach((curve, idx) => {
+    const canvas = $(`evalCurveCanvas${idx}`);
+    if (canvas) drawEvalReportCurve(canvas, curve.points || [], curve.label || "Eval curve");
+  });
 }
 
 function renderMaintainerSection(context) {
@@ -386,7 +457,7 @@ function renderMaintainerSection(context) {
   const consoleLogs = maintainer.console_logs || [];
   $("maintainerStatusPill").textContent = app.maintainerRunning ? "running" : (summary.last_run_id ? "ready" : "not run");
   $("earningStatus").textContent =
-    `${fmtSignedMoney(stats.estimated_pnl || 0)} · ${fmtMoney(stats.open_cost_basis || 0)} open cost`;
+    `${fmtSignedMoney(stats.open_marked_pnl || 0)} · ${fmtMoney(stats.open_marked_value || 0)} current holds`;
   $("strategyStatus").textContent = summary.last_finished_at
     ? new Date(summary.last_finished_at).toLocaleString()
     : "no completed run";
@@ -405,19 +476,31 @@ function renderMaintainerSection(context) {
       <strong>${escapeHtml(value)}</strong>
     </div>
   `).join("");
-  $("maintainerPositionStatus").textContent = `${positions.length} open positions`;
+  const validKeys = new Set(positions.map((pos) => positionKey(pos)));
+  app.selectedManualSell = new Set(
+    Array.from(app.selectedManualSell).filter((key) => validKeys.has(key)),
+  );
+  $("maintainerPositionStatus").textContent =
+    `${positions.length} open positions · ${app.selectedManualSell.size} selected`;
   $("maintainerPositionList").innerHTML = positions.length
-    ? positions.map((pos) => `
-      <div class="market-exposure-row">
-        <span>
+    ? positions.map((pos) => {
+      const key = positionKey(pos);
+      const selected = app.selectedManualSell.has(key);
+      return `
+      <label class="manual-sell-card ${selected ? "selected" : ""}">
+        <input class="manual-sell-check" type="checkbox" data-key="${escapeAttr(key)}" ${selected ? "checked" : ""} />
+        <span class="manual-sell-main">
           <strong>${escapeHtml(pos.question || shortId(pos.condition_id))}</strong>
-          <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · avg ${fmtToken(pos.avg_price)}</small>
+          <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · avg ${fmtToken(pos.avg_price)} · ${fmtMoney(pos.current_value ?? pos.notional)} hold value</small>
         </span>
-        <span>${fmtMoney(pos.notional)} cost</span>
-        <b class="${pnlClass(pos.estimated_pnl)}">${fmtMaybeSignedMoney(pos.estimated_pnl)}</b>
-      </div>
-    `).join("")
+        <span class="manual-sell-side">${escapeHtml(pos.mark_source === "live_bid" ? `bid ${fmtToken(pos.current_bid)}` : "cost fallback")}</span>
+        <b class="${pnlClass(pos.current_pnl)}">${fmtMaybeSignedMoney(pos.current_pnl)}</b>
+      </label>
+    `;
+    }).join("")
     : `<div class="empty-panel">No open shares for this account.</div>`;
+  bindManualSellChecks();
+  updateManualSellButtons();
   $("maintainerDecisionStatus").textContent = `${decisions.length} recent rows`;
   $("maintainerDecisionList").innerHTML = decisions.length
     ? decisions.map((row) => `
@@ -452,6 +535,50 @@ function renderMaintainerConsole(listId, statusId, logs) {
     : `<div class="empty-panel">No sell, purchase, or maintain logs yet.</div>`;
 }
 
+function positionKey(pos) {
+  return `${pos.condition_id || ""}:${pos.side || "YES"}`;
+}
+
+function positionFromKey(key) {
+  const idx = key.lastIndexOf(":");
+  if (idx < 0) return { condition_id: key, side: "YES" };
+  return {
+    condition_id: key.slice(0, idx),
+    side: key.slice(idx + 1) || "YES",
+  };
+}
+
+function bindManualSellChecks() {
+  document.querySelectorAll(".manual-sell-check").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const key = checkbox.dataset.key || "";
+      if (!key) return;
+      if (checkbox.checked) app.selectedManualSell.add(key);
+      else app.selectedManualSell.delete(key);
+      renderMaintainerSection(app.state.account_context || {});
+    });
+  });
+}
+
+function updateManualSellButtons() {
+  const hasPositions = (app.state.account_context?.positions || []).length > 0;
+  $("manualSellSelectedBtn").disabled = app.maintainerRunning || app.selectedManualSell.size === 0;
+  $("manualSellAllBtn").disabled = app.maintainerRunning || !hasPositions;
+  $("manualSellSelectAllBtn").disabled = app.maintainerRunning || !hasPositions;
+  $("manualSellClearBtn").disabled = app.maintainerRunning || app.selectedManualSell.size === 0;
+}
+
+function selectAllManualSell() {
+  const positions = app.state.account_context?.positions || [];
+  positions.forEach((pos) => app.selectedManualSell.add(positionKey(pos)));
+  renderMaintainerSection(app.state.account_context || {});
+}
+
+function clearManualSellSelection() {
+  app.selectedManualSell.clear();
+  renderMaintainerSection(app.state.account_context || {});
+}
+
 function renderEventPositionGroups(groups) {
   return groups.map((group) => `
     <section class="event-exposure-card ${app.expandedPositionEvents.has(group.event_id) ? "expanded" : ""}">
@@ -462,20 +589,24 @@ function renderEventPositionGroups(groups) {
         </span>
         <span class="event-exposure-actions">
           <b class="${pnlClass(group.estimated_pnl)}">${fmtMaybeSignedMoney(group.estimated_pnl)}</b>
+          <small>${escapeHtml(group.pnl_label || "current hold PnL")}</small>
           <small>${app.expandedPositionEvents.has(group.event_id) ? "Hide markets" : "Show markets"}</small>
         </span>
       </button>
       <div class="event-exposure-body">
-        ${(group.rows || []).map((pos) => `
+        ${(group.rows || []).map((pos) => {
+          const pnl = pos.current_pnl ?? pos.estimated_pnl;
+          return `
           <div class="market-exposure-row">
             <span>
               <strong>${escapeHtml(pos.question || shortId(pos.condition_id))}</strong>
-              <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · ${pos.trade_count || 0} trades</small>
+              <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · ${pos.trade_count || 0} trades · ${escapeHtml(pos.mark_source === "live_bid" ? `bid ${fmtToken(pos.current_bid)}` : "cost fallback")}</small>
             </span>
-            <span>${fmtMoney(pos.notional)} notional</span>
-            <b class="${pnlClass(pos.estimated_pnl)}">${fmtMaybeSignedMoney(pos.estimated_pnl)}</b>
+            <span>${fmtMoney(pos.current_value ?? pos.notional)} hold value</span>
+            <b class="${pnlClass(pnl)}">${fmtMaybeSignedMoney(pnl)}</b>
           </div>
-        `).join("")}
+        `;
+        }).join("")}
       </div>
     </section>
   `).join("");
@@ -490,7 +621,8 @@ function renderEventTradeGroups(groups) {
           <small>${escapeHtml(group.event_category || "Event")} · ${group.trade_count} trade records</small>
         </span>
         <span class="event-exposure-actions">
-          <b class="${pnlClass(group.estimated_pnl)}">${fmtMaybeSignedMoney(group.estimated_pnl)}</b>
+          <b class="${expectedEdgeClass(group.estimated_pnl)}">${fmtMaybeSignedMoney(group.estimated_pnl)}</b>
+          <small>${escapeHtml(group.pnl_label || "expected edge")}</small>
           <small>${app.expandedTradeEvents.has(group.event_id) ? "Hide trades" : "Show trades"}</small>
         </span>
       </button>
@@ -502,7 +634,7 @@ function renderEventTradeGroups(groups) {
               <small>${trade.at ? new Date(trade.at).toLocaleString() : ""}</small>
             </span>
             <span>${escapeHtml(trade.side || "YES")} ${fmtSize(trade.size)} · ${fmtMoney(trade.notional)}</span>
-            <b class="${pnlClass(trade.estimated_pnl)}">${fmtMaybeSignedMoney(trade.estimated_pnl)}</b>
+            <b class="${expectedEdgeClass(trade.estimated_pnl)}">${fmtMaybeSignedMoney(trade.estimated_pnl)} exp.</b>
           </div>
         `).join("")}
       </div>
@@ -1191,6 +1323,31 @@ function drawEarningChart(canvas, points) {
   ctx.fillText(fmtSignedMoney(values[values.length - 1]), 12, ctx.logicalHeight - 12);
 }
 
+function drawEvalReportCurve(canvas, points, title) {
+  const ctx = setupCanvas(canvas);
+  clearChart(ctx, canvas, title);
+  const values = (points || []).map((point) => Number(point.pnl || 0));
+  if (!values.length) {
+    ctx.fillStyle = cssVar("--muted");
+    ctx.font = "12px system-ui";
+    ctx.fillText("No eval report history yet", 12, 54);
+    return;
+  }
+  const pad = 32;
+  const min = Math.min(-1, ...values) * 1.08;
+  const max = Math.max(1, ...values) * 1.08;
+  drawLine(ctx, values, min, max, pad, ctx.logicalWidth, ctx.logicalHeight, "#1b8f62");
+  const zeroY = ctx.logicalHeight - pad - ((0 - min) / Math.max(0.001, max - min)) * (ctx.logicalHeight - pad * 2);
+  ctx.strokeStyle = cssVar("--line");
+  ctx.beginPath();
+  ctx.moveTo(pad, zeroY);
+  ctx.lineTo(ctx.logicalWidth - pad, zeroY);
+  ctx.stroke();
+  ctx.fillStyle = values[values.length - 1] >= 0 ? cssVar("--green") : cssVar("--red");
+  ctx.font = "11px system-ui";
+  ctx.fillText(fmtSignedMoney(values[values.length - 1]), 12, ctx.logicalHeight - 12);
+}
+
 function setupCanvas(canvas) {
   const scale = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -1430,6 +1587,10 @@ function bindEvents() {
   $("maintainerSellBtn").addEventListener("click", () => runMaintainerAction("sell"));
   $("maintainerBuyBtn").addEventListener("click", () => runMaintainerAction("purchase"));
   $("maintainerRunBtn").addEventListener("click", () => runMaintainerAction("maintain"));
+  $("manualSellSelectAllBtn").addEventListener("click", selectAllManualSell);
+  $("manualSellClearBtn").addEventListener("click", clearManualSellSelection);
+  $("manualSellSelectedBtn").addEventListener("click", runManualSellSelected);
+  $("manualSellAllBtn").addEventListener("click", runManualSellAll);
   $("themeToggle").addEventListener("click", () => {
     applyTheme(app.theme === "dark" ? "light" : "dark");
   });
@@ -1675,7 +1836,7 @@ function updateDialogState() {
   }
 }
 
-async function runMaintainerAction(action) {
+async function runMaintainerAction(action, extraPayload = {}) {
   if (app.maintainerRunning) return;
   app.maintainerRunning = true;
   logControl("maintainer action started", {
@@ -1684,12 +1845,13 @@ async function runMaintainerAction(action) {
   });
   setMaintainerButtons(true, action);
   app.maintainerPoll = window.setInterval(() => {
-    loadState().catch(() => {});
+    loadState({ refreshMarks: false }).catch(() => {});
   }, 1500);
   try {
     await post("/api/maintainer-action", {
       action,
       dry_run: $("maintainerDryRun").checked,
+      ...extraPayload,
     });
     const maintainer = app.state.account_context?.maintainer || {};
     logControl("maintainer action finished", {
@@ -1705,8 +1867,30 @@ async function runMaintainerAction(action) {
     }
     app.maintainerRunning = false;
     setMaintainerButtons(false, "");
-    loadState().catch(() => {});
+    if (action === "manual_sell" && !$("maintainerDryRun").checked) {
+      app.selectedManualSell.clear();
+    }
+    loadState({ refreshMarks: false })
+      .then(() => refreshAccountMarks())
+      .catch(() => {});
   }
+}
+
+function runManualSellSelected() {
+  const positions = Array.from(app.selectedManualSell).map(positionFromKey);
+  return runMaintainerAction("manual_sell", {
+    positions,
+    all_positions: false,
+    sell_fraction: 1.0,
+  });
+}
+
+function runManualSellAll() {
+  return runMaintainerAction("manual_sell", {
+    positions: [],
+    all_positions: true,
+    sell_fraction: 1.0,
+  });
 }
 
 function setMaintainerButtons(disabled, action) {
@@ -1715,10 +1899,15 @@ function setMaintainerButtons(disabled, action) {
     "maintainerSellBtn",
     "maintainerBuyBtn",
     "maintainerRunBtn",
+    "manualSellSelectedBtn",
+    "manualSellAllBtn",
+    "manualSellSelectAllBtn",
+    "manualSellClearBtn",
   ].forEach((id) => {
-    $(id).disabled = disabled;
+    if ($(id)) $(id).disabled = disabled;
   });
   $("maintainerStatusPill").textContent = disabled ? `${action}...` : "ready";
+  if (!disabled) updateManualSellButtons();
 }
 
 function applyTheme(theme) {

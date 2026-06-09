@@ -660,7 +660,9 @@ textarea:focus {
 
 .account-row {
   display: grid;
-  gap: 3px;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 6px;
   width: 100%;
   padding: 10px;
   color: var(--text);
@@ -676,9 +678,25 @@ textarea:focus {
   background: var(--blue-soft);
 }
 
-.account-row span {
+.account-select-btn {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+
+.account-row span,
+.account-select-btn span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.account-delete-btn {
+  color: var(--red);
 }
 
 .create-user {
@@ -1073,6 +1091,64 @@ body:has(.app-shell.right-collapsed) #showRight {
 .mini-stats.maintainer-actions {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 10px 0;
+}
+
+.manual-sell-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.manual-sell-toolbar .btn {
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.manual-sell-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(88px, auto) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  cursor: pointer;
+}
+
+.manual-sell-card.selected {
+  border-color: var(--blue);
+  background: rgba(47, 109, 246, 0.08);
+}
+
+.manual-sell-card input {
+  width: 16px;
+  height: 16px;
+}
+
+.manual-sell-main {
+  min-width: 0;
+}
+
+.manual-sell-main strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.manual-sell-main small,
+.manual-sell-side {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.manual-sell-side {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mini-stat {
@@ -1720,6 +1796,55 @@ canvas {
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
 }
 
+.eval-curve-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.eval-curve-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--rail);
+}
+
+.eval-curve-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.eval-curve-head strong,
+.eval-curve-head small,
+.eval-curve-meta span {
+  display: block;
+}
+
+.eval-curve-head small,
+.eval-curve-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.eval-curve-card code {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eval-curve-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .user-block {
   margin: 0;
   overflow: visible;
@@ -1850,6 +1975,12 @@ canvas {
 .position-row b,
 .trade-row b {
   font-size: 14px;
+}
+
+.expected-positive,
+.expected-negative {
+  color: var(--muted);
+  font-weight: 800;
 }
 
 .transaction-row small,
@@ -2048,6 +2179,10 @@ canvas {
   }
 
   .user-grid.two {
+    grid-template-columns: 1fr;
+  }
+
+  .eval-curve-grid {
     grid-template-columns: 1fr;
   }
 
