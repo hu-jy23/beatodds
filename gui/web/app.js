@@ -12,16 +12,125 @@ const app = {
   pendingUpdateAll: false,
   dragPanel: null,
   theme: localStorage.getItem("beatodds-theme") || "light",
+  language: localStorage.getItem("beatodds-language") || "en",
   page: localStorage.getItem("beatodds-page") || "markets",
   userSection: localStorage.getItem("beatodds-user-section") || "overview",
   expandedPositionEvents: new Set(),
   expandedTradeEvents: new Set(),
   selectedManualSell: new Set(),
+  strategyDecisionsOpen: localStorage.getItem("beatodds-strategy-decisions-open") !== "0",
   maintainerRunning: false,
   maintainerPoll: null,
 };
 
 const $ = (id) => document.getElementById(id);
+
+const I18N = {
+  en: {
+    languageToggle: "中文",
+    userNavOverview: "Overview",
+    userNavProfile: "Settings",
+    userNavFunds: "Funds",
+    userNavPositions: "Current shares",
+    userNavAgent: "Agent Pattern",
+    positionsEyebrow: "Account Ledger",
+    positionsTitle: "Current shares",
+    refreshPositions: "Refresh positions",
+    currentSharesTitle: "Current shares",
+    tradeStatusDefault: "paper deals",
+    strategyDecisions: "Strategy Decisions",
+    hideDecisions: "Hide",
+    showDecisions: "Show",
+    recentRows: "recent rows",
+    noStrategyRecords: "No maintainer strategy records yet.",
+    earningCurve: "Earning Curve",
+    earningStatusDefault: "cash + open cost basis",
+    manualUpdate: "Manual update",
+    sell: "Sell",
+    purchase: "Purchase",
+    maintain: "Maintain",
+    dryRun: "Dry run",
+    strategy: "Strategy",
+    strategyStatusDefault: "latest run",
+    maintainerConsole: "Maintainer Console",
+    maintainerConsoleStatus: "latest command output",
+    settings: "Settings",
+    funds: "Funds",
+    localLedger: "local paper ledger",
+    noTradeRecords: "No paper trade records yet.",
+    tradesUnit: "trades",
+    strategyDecisionsUnit: "strategy decisions",
+    cash: "Cash",
+    shareHold: "Share value",
+    totalMoney: "Total money",
+    earnLoss: "Earn / loss",
+    availablePaperCash: "available paper cash",
+    cost: "cost",
+    marked: "marked",
+    cashReservedShares: "cash + reserved + shares",
+    initial: "initial",
+    currentHolds: "current holds",
+    openCurrentHoldPnl: "open current hold PnL",
+    noOpenMarkedHold: "no open marked hold",
+    hideTrades: "Hide shares",
+    showTrades: "Show shares",
+    closedOrUnmarked: "closed or unmarked",
+  },
+  zh: {
+    languageToggle: "English",
+    userNavOverview: "总览",
+    userNavProfile: "基础设置",
+    userNavFunds: "资金管理",
+    userNavPositions: "当前持仓",
+    userNavAgent: "代理模式",
+    positionsEyebrow: "账户账本",
+    positionsTitle: "当前持仓",
+    refreshPositions: "刷新持仓",
+    currentSharesTitle: "当前持仓",
+    tradeStatusDefault: "纸面交易",
+    strategyDecisions: "策略决策",
+    hideDecisions: "收起",
+    showDecisions: "展开",
+    recentRows: "条最近记录",
+    noStrategyRecords: "暂无维护器策略记录。",
+    earningCurve: "收益曲线",
+    earningStatusDefault: "现金 + 持仓成本",
+    manualUpdate: "手动更新",
+    sell: "卖出",
+    purchase: "买入",
+    maintain: "维护",
+    dryRun: "模拟运行",
+    strategy: "策略",
+    strategyStatusDefault: "最近运行",
+    maintainerConsole: "维护器控制台",
+    maintainerConsoleStatus: "最近命令输出",
+    settings: "基础设置",
+    funds: "资金管理",
+    localLedger: "本地纸面账本",
+    noTradeRecords: "暂无纸面交易记录。",
+    tradesUnit: "笔交易",
+    strategyDecisionsUnit: "条策略决策",
+    cash: "现金",
+    shareHold: "持仓价值",
+    totalMoney: "总资金",
+    earnLoss: "收益 / 亏损",
+    availablePaperCash: "可用纸面现金",
+    cost: "成本",
+    marked: "已标记",
+    cashReservedShares: "现金 + 冻结 + 持仓",
+    initial: "初始",
+    currentHolds: "当前持仓",
+    openCurrentHoldPnl: "个当前持仓盈亏",
+    noOpenMarkedHold: "无已标记持仓",
+    hideTrades: "收起持仓",
+    showTrades: "展开持仓",
+    closedOrUnmarked: "已平仓或未标记",
+  },
+};
+
+function t(key) {
+  return (I18N[app.language] || I18N.en)[key] || I18N.en[key] || key;
+}
 
 function logControl(action, detail = {}) {
   console.info(`[BeatOdds] ${action}`, {
@@ -82,11 +191,6 @@ function fmtMaybeSignedMoney(value) {
 function pnlClass(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "muted";
   return Number(value) >= 0 ? "positive" : "negative";
-}
-
-function expectedEdgeClass(value) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return "muted";
-  return Number(value) >= 0 ? "expected-positive" : "expected-negative";
 }
 
 function shortId(id) {
@@ -205,6 +309,8 @@ async function refreshSelectedMarketDetail() {
 
 function render() {
   renderPage();
+  if (!app.state) return;
+  applyLanguage();
   renderAccountControls();
   renderMetrics();
   renderMarkets();
@@ -257,6 +363,7 @@ function renderMetrics() {
 }
 
 function renderAccountControls() {
+  if (!app.state) return;
   const context = app.state.account_context || {};
   const account = context.selected_account || {};
   const accounts = context.accounts || [];
@@ -307,15 +414,16 @@ function renderAccountControls() {
 }
 
 function renderUserPage() {
+  if (!app.state) return;
   const context = app.state.account_context || {};
   const account = context.selected_account || {};
   const stats = context.user_stats || {};
   const transactions = context.transactions || [];
   const positions = context.positions || [];
   const trades = context.trade_records || [];
-  const positionGroups = context.position_event_groups || [];
   const tradeGroups = context.trade_event_groups || [];
   const evalCurves = context.eval_curves || [];
+  const strategyDecisions = context.maintainer?.recent_decisions || [];
   const icon = account.icon_url || "";
   $("userAvatar").innerHTML = icon
     ? `<img src="${escapeAttr(icon)}" alt="" loading="lazy" />`
@@ -327,20 +435,24 @@ function renderUserPage() {
   $("profileName").value = account.name || "";
   $("profileIconUrl").value = account.icon_url || "";
   $("profileNotes").value = account.notes || "";
+  const activeUserSection = normalizeUserSection(app.userSection);
+  if (activeUserSection !== app.userSection) {
+    app.userSection = activeUserSection;
+    localStorage.setItem("beatodds-user-section", app.userSection);
+  }
 
   document.querySelectorAll(".user-nav-btn").forEach((button) => {
-    button.classList.toggle("active", button.dataset.userSection === app.userSection);
+    button.classList.toggle("active", button.dataset.userSection === activeUserSection);
   });
   const sectionIds = {
     overview: "userOverviewSection",
     profile: "userProfileSection",
     funds: "userFundsSection",
     positions: "userPositionsSection",
-    maintainer: "userMaintainerSection",
     agent: "userAgentSection",
   };
   Object.entries(sectionIds).forEach(([key, id]) => {
-    $(id).classList.toggle("hidden", key !== app.userSection);
+    $(id).classList.toggle("hidden", key !== activeUserSection);
   });
 
   $("userStatGrid").innerHTML = [
@@ -382,35 +494,33 @@ function renderUserPage() {
     .join("");
 
   $("accountMoneyStrip").innerHTML = [
-    ["Cash", fmtMoney(stats.cash_balance ?? account.cash_balance), "available paper cash"],
+    [t("cash"), fmtMoney(stats.cash_balance ?? account.cash_balance), t("availablePaperCash")],
     [
-      "Share hold",
+      t("shareHold"),
       fmtMoney(stats.projected_share_value ?? stats.share_hold_cost),
-      `${fmtMoney(stats.share_hold_cost || 0)} cost · ${stats.open_marked_count || 0} marked`,
+      `${fmtMoney(stats.share_hold_cost || 0)} ${t("cost")} · ${stats.open_marked_count || 0} ${t("marked")}`,
     ],
-    ["Total money", fmtMoney(stats.total_account_money ?? account.equity), "cash + reserved + shares"],
-    ["Earn / loss", fmtMaybeSignedMoney(stats.total_earn_loss), `initial ${fmtMoney(stats.initial_cash ?? account.initial_cash)}`],
+    [t("totalMoney"), fmtMoney(stats.total_account_money ?? account.equity), t("cashReservedShares")],
+    [t("earnLoss"), fmtMaybeSignedMoney(stats.total_earn_loss), `${t("initial")} ${fmtMoney(stats.initial_cash ?? account.initial_cash)}`],
   ].map(([label, value, detail]) => `
-    <div class="account-money-cell ${label === "Earn / loss" ? pnlClass(stats.total_earn_loss) : ""}">
+    <div class="account-money-cell ${label === t("earnLoss") ? pnlClass(stats.total_earn_loss) : ""}">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(value)}</strong>
       <small>${escapeHtml(detail)}</small>
     </div>
   `).join("");
 
-  $("positionStatus").textContent = `${positions.length} formal positions`;
-  $("positionList").innerHTML = positionGroups.length
-    ? renderEventPositionGroups(positionGroups)
-    : `<div class="empty-panel">No formal open positions yet.</div>`;
-
-  $("tradeStatus").textContent = `${trades.length} records`;
+  $("tradeStatus").textContent =
+    `${trades.length} ${t("tradesUnit")} · ${strategyDecisions.length} ${t("strategyDecisionsUnit")}`;
   $("tradeList").innerHTML = tradeGroups.length
-    ? renderEventTradeGroups(tradeGroups)
-    : `<div class="empty-panel">No paper trade records yet.</div>`;
+    ? renderEventTradeGroups(tradeGroups, positions)
+    : `<div class="empty-panel">${escapeHtml(t("noTradeRecords"))}</div>`;
+  renderMergedStrategyDecisions(strategyDecisions);
 
   if (app.page === "user") drawUserNavChart($("userNavChart"), context.nav_points || []);
   renderEvalCurves(evalCurves);
   renderMaintainerSection(context);
+  applyLanguage();
 }
 
 function renderEvalCurves(curves) {
@@ -452,69 +562,69 @@ function renderMaintainerSection(context) {
   const maintainer = context.maintainer || {};
   const summary = maintainer.summary || {};
   const params = maintainer.params || {};
-  const positions = context.positions || [];
   const decisions = maintainer.recent_decisions || [];
   const consoleLogs = maintainer.console_logs || [];
-  $("maintainerStatusPill").textContent = app.maintainerRunning ? "running" : (summary.last_run_id ? "ready" : "not run");
   $("earningStatus").textContent =
-    `${fmtSignedMoney(stats.open_marked_pnl || 0)} · ${fmtMoney(stats.open_marked_value || 0)} current holds`;
+    `${fmtSignedMoney(stats.open_marked_pnl || 0)} · ${fmtMoney(stats.open_marked_value || 0)} ${t("currentHolds")}`;
   $("strategyStatus").textContent = summary.last_finished_at
     ? new Date(summary.last_finished_at).toLocaleString()
-    : "no completed run";
+    : (app.language === "zh" ? "暂无完成运行" : "no completed run");
   $("strategyGrid").innerHTML = [
-    ["Entry edge", `${fmtPct(params.min_edge || 0)} gross / ${fmtPct(params.min_net_edge || 0)} net`],
-    ["Confidence", fmtPct(params.min_confidence || 0)],
-    ["Spread cap", fmtPct(params.max_spread || 0)],
-    ["Order cap", fmtMoney(params.max_order_notional || account.max_order_notional || 0)],
-    ["Sell return", fmtPct(params.sell_min_return || 0)],
-    ["Stop loss", fmtPct(params.sell_max_loss || 0)],
-    ["Last sold", String(summary.last_sold || 0)],
-    ["Last buys", String(summary.last_buys || 0)],
+    [app.language === "zh" ? "入场边际" : "Entry edge", `${fmtPct(params.min_edge || 0)} gross / ${fmtPct(params.min_net_edge || 0)} net`],
+    [app.language === "zh" ? "信心" : "Confidence", fmtPct(params.min_confidence || 0)],
+    [app.language === "zh" ? "点差上限" : "Spread cap", fmtPct(params.max_spread || 0)],
+    [app.language === "zh" ? "订单上限" : "Order cap", fmtMoney(params.max_order_notional || account.max_order_notional || 0)],
+    [app.language === "zh" ? "卖出收益" : "Sell return", fmtPct(params.sell_min_return || 0)],
+    [app.language === "zh" ? "止损" : "Stop loss", fmtPct(params.sell_max_loss || 0)],
+    [app.language === "zh" ? "最近卖出" : "Last sold", String(summary.last_sold || 0)],
+    [app.language === "zh" ? "最近买入" : "Last buys", String(summary.last_buys || 0)],
   ].map(([label, value]) => `
     <div class="strategy-cell">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(value)}</strong>
     </div>
   `).join("");
-  const validKeys = new Set(positions.map((pos) => positionKey(pos)));
-  app.selectedManualSell = new Set(
-    Array.from(app.selectedManualSell).filter((key) => validKeys.has(key)),
-  );
-  $("maintainerPositionStatus").textContent =
-    `${positions.length} open positions · ${app.selectedManualSell.size} selected`;
-  $("maintainerPositionList").innerHTML = positions.length
-    ? positions.map((pos) => {
-      const key = positionKey(pos);
-      const selected = app.selectedManualSell.has(key);
-      return `
-      <label class="manual-sell-card ${selected ? "selected" : ""}">
-        <input class="manual-sell-check" type="checkbox" data-key="${escapeAttr(key)}" ${selected ? "checked" : ""} />
-        <span class="manual-sell-main">
-          <strong>${escapeHtml(pos.question || shortId(pos.condition_id))}</strong>
-          <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · avg ${fmtToken(pos.avg_price)} · ${fmtMoney(pos.current_value ?? pos.notional)} hold value</small>
-        </span>
-        <span class="manual-sell-side">${escapeHtml(pos.mark_source === "live_bid" ? `bid ${fmtToken(pos.current_bid)}` : "cost fallback")}</span>
-        <b class="${pnlClass(pos.current_pnl)}">${fmtMaybeSignedMoney(pos.current_pnl)}</b>
-      </label>
-    `;
-    }).join("")
-    : `<div class="empty-panel">No open shares for this account.</div>`;
-  bindManualSellChecks();
-  updateManualSellButtons();
-  $("maintainerDecisionStatus").textContent = `${decisions.length} recent rows`;
-  $("maintainerDecisionList").innerHTML = decisions.length
-    ? decisions.map((row) => `
-      <div class="trade-row">
-        <strong>${escapeHtml(row.action || row.phase || "decision")} · ${escapeHtml(row.side || "")}</strong>
-        <span>${row.created_at ? new Date(row.created_at).toLocaleString() : ""}</span>
-        <b class="${pnlClass(row.realized_pnl)}">${fmtMaybeSignedMoney(row.realized_pnl)}</b>
-        <small>${escapeHtml(row.reason || row.question || shortId(row.condition_id))}</small>
-      </div>
-    `).join("")
-    : `<div class="empty-panel">No maintainer strategy records yet.</div>`;
+  renderMergedStrategyDecisions(decisions);
   renderMaintainerConsole("overviewMaintainerConsole", "overviewMaintainerConsoleStatus", consoleLogs);
   renderMaintainerConsole("maintainerConsole", "maintainerConsoleStatus", consoleLogs);
   if (app.page === "user") drawEarningChart($("earningCurveChart"), context.earning_points || []);
+}
+
+function renderMergedStrategyDecisions(decisions) {
+  const list = $("mergedDecisionList");
+  if (!list) return;
+  const isOpen = app.strategyDecisionsOpen;
+  list.innerHTML = `
+    <div class="merged-decision-head">
+      <button class="merged-decision-toggle" type="button" id="strategyDecisionToggle" aria-expanded="${isOpen ? "true" : "false"}">
+        <span>${isOpen ? "▾" : "▸"}</span>
+        <strong>${escapeHtml(t("strategyDecisions"))}</strong>
+      </button>
+      <span>${decisions.length} ${escapeHtml(t("recentRows"))}</span>
+    </div>
+    <div class="merged-decision-body ${isOpen ? "" : "hidden"}">
+      ${
+        decisions.length
+        ? decisions.map((row) => `
+          <div class="trade-row strategy-decision-row">
+            <strong>${escapeHtml(row.action || row.phase || "decision")} · ${escapeHtml(row.side || "")}</strong>
+            <span>${row.created_at ? new Date(row.created_at).toLocaleString() : ""}</span>
+            <b class="${pnlClass(row.realized_pnl)}">${fmtMaybeSignedMoney(row.realized_pnl)}</b>
+            <small>${escapeHtml(row.reason || row.question || shortId(row.condition_id))}</small>
+          </div>
+        `).join("")
+        : `<div class="empty-panel">${escapeHtml(t("noStrategyRecords"))}</div>`
+      }
+    </div>
+  `;
+  const toggle = $("strategyDecisionToggle");
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      app.strategyDecisionsOpen = !app.strategyDecisionsOpen;
+      localStorage.setItem("beatodds-strategy-decisions-open", app.strategyDecisionsOpen ? "1" : "0");
+      renderMergedStrategyDecisions(decisions);
+    });
+  }
 }
 
 function renderMaintainerConsole(listId, statusId, logs) {
@@ -562,10 +672,14 @@ function bindManualSellChecks() {
 
 function updateManualSellButtons() {
   const hasPositions = (app.state.account_context?.positions || []).length > 0;
-  $("manualSellSelectedBtn").disabled = app.maintainerRunning || app.selectedManualSell.size === 0;
-  $("manualSellAllBtn").disabled = app.maintainerRunning || !hasPositions;
-  $("manualSellSelectAllBtn").disabled = app.maintainerRunning || !hasPositions;
-  $("manualSellClearBtn").disabled = app.maintainerRunning || app.selectedManualSell.size === 0;
+  const selectedBtn = $("manualSellSelectedBtn");
+  const allBtn = $("manualSellAllBtn");
+  const selectAllBtn = $("manualSellSelectAllBtn");
+  const clearBtn = $("manualSellClearBtn");
+  if (selectedBtn) selectedBtn.disabled = app.maintainerRunning || app.selectedManualSell.size === 0;
+  if (allBtn) allBtn.disabled = app.maintainerRunning || !hasPositions;
+  if (selectAllBtn) selectAllBtn.disabled = app.maintainerRunning || !hasPositions;
+  if (clearBtn) clearBtn.disabled = app.maintainerRunning || app.selectedManualSell.size === 0;
 }
 
 function selectAllManualSell() {
@@ -580,7 +694,12 @@ function clearManualSellSelection() {
 }
 
 function renderEventPositionGroups(groups) {
-  return groups.map((group) => `
+  return groups.map((group) => {
+    const markedRows = (group.rows || []).filter((pos) => pos.current_pnl !== null && pos.current_pnl !== undefined);
+    const groupPnl = markedRows.length
+      ? markedRows.reduce((sum, pos) => sum + Number(pos.current_pnl || 0), 0)
+      : null;
+    return `
     <section class="event-exposure-card ${app.expandedPositionEvents.has(group.event_id) ? "expanded" : ""}">
       <button class="event-exposure-head" type="button" data-exposure-kind="position" data-event-id="${escapeAttr(group.event_id)}">
         <span>
@@ -588,19 +707,22 @@ function renderEventPositionGroups(groups) {
           <small>${escapeHtml(group.event_category || "Event")} · ${group.row_count} markets · ${group.trade_count} trades</small>
         </span>
         <span class="event-exposure-actions">
-          <b class="${pnlClass(group.estimated_pnl)}">${fmtMaybeSignedMoney(group.estimated_pnl)}</b>
-          <small>${escapeHtml(group.pnl_label || "current hold PnL")}</small>
+          <b class="${pnlClass(groupPnl)}">${fmtMaybeSignedMoney(groupPnl)}</b>
+          <small>${markedRows.length ? `${markedRows.length} marked current hold PnL` : "no open marked hold"}</small>
           <small>${app.expandedPositionEvents.has(group.event_id) ? "Hide markets" : "Show markets"}</small>
         </span>
       </button>
       <div class="event-exposure-body">
         ${(group.rows || []).map((pos) => {
-          const pnl = pos.current_pnl ?? pos.estimated_pnl;
+          const pnl = pos.current_pnl ?? null;
+          const markText = pos.current_pnl !== null && pos.current_pnl !== undefined
+            ? (pos.mark_source === "live_bid" ? `bid ${fmtToken(pos.current_bid)}` : "cost fallback")
+            : "unmarked";
           return `
           <div class="market-exposure-row">
             <span>
               <strong>${escapeHtml(pos.question || shortId(pos.condition_id))}</strong>
-              <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · ${pos.trade_count || 0} trades · ${escapeHtml(pos.mark_source === "live_bid" ? `bid ${fmtToken(pos.current_bid)}` : "cost fallback")}</small>
+              <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · ${pos.trade_count || 0} trades · ${escapeHtml(markText)}</small>
             </span>
             <span>${fmtMoney(pos.current_value ?? pos.notional)} hold value</span>
             <b class="${pnlClass(pnl)}">${fmtMaybeSignedMoney(pnl)}</b>
@@ -609,11 +731,49 @@ function renderEventPositionGroups(groups) {
         }).join("")}
       </div>
     </section>
-  `).join("");
+  `;
+  }).join("");
 }
 
-function renderEventTradeGroups(groups) {
-  return groups.map((group) => `
+function positionPnlIndex(positions) {
+  const byKey = new Map();
+  (positions || []).forEach((pos) => {
+    byKey.set(positionKey(pos), pos);
+  });
+  return byKey;
+}
+
+function tradeHoldMark(trade, positionIndex) {
+  const pos = positionIndex.get(positionKey(trade));
+  if (!pos || pos.current_pnl === null || pos.current_pnl === undefined) return null;
+  return {
+    pnl: pos.current_pnl,
+    value: pos.current_value ?? pos.notional,
+    source: pos.mark_source === "live_bid" ? `bid ${fmtToken(pos.current_bid)}` : "cost fallback",
+  };
+}
+
+function tradeGroupHoldPnl(group, positionIndex) {
+  const seen = new Set();
+  let pnl = 0;
+  let count = 0;
+  (group.rows || []).forEach((trade) => {
+    const key = positionKey(trade);
+    if (seen.has(key)) return;
+    seen.add(key);
+    const mark = tradeHoldMark(trade, positionIndex);
+    if (!mark) return;
+    pnl += Number(mark.pnl || 0);
+    count += 1;
+  });
+  return count ? { pnl, count } : null;
+}
+
+function renderEventTradeGroups(groups, positions) {
+  const positionIndex = positionPnlIndex(positions);
+  return groups.map((group) => {
+    const groupMark = tradeGroupHoldPnl(group, positionIndex);
+    return `
     <section class="event-exposure-card ${app.expandedTradeEvents.has(group.event_id) ? "expanded" : ""}">
       <button class="event-exposure-head" type="button" data-exposure-kind="trade" data-event-id="${escapeAttr(group.event_id)}">
         <span>
@@ -621,25 +781,29 @@ function renderEventTradeGroups(groups) {
           <small>${escapeHtml(group.event_category || "Event")} · ${group.trade_count} trade records</small>
         </span>
         <span class="event-exposure-actions">
-          <b class="${expectedEdgeClass(group.estimated_pnl)}">${fmtMaybeSignedMoney(group.estimated_pnl)}</b>
-          <small>${escapeHtml(group.pnl_label || "expected edge")}</small>
-          <small>${app.expandedTradeEvents.has(group.event_id) ? "Hide trades" : "Show trades"}</small>
+          <b class="${pnlClass(groupMark?.pnl)}">${fmtMaybeSignedMoney(groupMark?.pnl)}</b>
+          <small>${groupMark ? `${groupMark.count} ${escapeHtml(t("openCurrentHoldPnl"))}` : escapeHtml(t("noOpenMarkedHold"))}</small>
+          <small>${app.expandedTradeEvents.has(group.event_id) ? escapeHtml(t("hideTrades")) : escapeHtml(t("showTrades"))}</small>
         </span>
       </button>
       <div class="event-exposure-body">
-        ${(group.rows || []).map((trade) => `
+        ${(group.rows || []).map((trade) => {
+          const mark = tradeHoldMark(trade, positionIndex);
+          return `
           <div class="market-exposure-row">
             <span>
               <strong>${escapeHtml(trade.question || shortId(trade.condition_id))}</strong>
-              <small>${trade.at ? new Date(trade.at).toLocaleString() : ""}</small>
+              <small>${trade.at ? new Date(trade.at).toLocaleString() : ""} · ${mark ? escapeHtml(mark.source) : escapeHtml(t("closedOrUnmarked"))}</small>
             </span>
             <span>${escapeHtml(trade.side || "YES")} ${fmtSize(trade.size)} · ${fmtMoney(trade.notional)}</span>
-            <b class="${expectedEdgeClass(trade.estimated_pnl)}">${fmtMaybeSignedMoney(trade.estimated_pnl)} exp.</b>
+            <b class="${pnlClass(mark?.pnl)}">${fmtMaybeSignedMoney(mark?.pnl)}</b>
           </div>
-        `).join("")}
+        `;
+        }).join("")}
       </div>
     </section>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function renderMarkets() {
@@ -1191,6 +1355,7 @@ function actionLabel(kind) {
 }
 
 function renderCharts() {
+  if (!app.state) return;
   const selected = app.state.selected;
   drawPriceChart($("priceChart"), selected?.chart || []);
   drawStatsChart($("statsChart"), app.state.stats?.category_counts || []);
@@ -1300,52 +1465,163 @@ function drawUserNavChart(canvas, points) {
 
 function drawEarningChart(canvas, points) {
   const ctx = setupCanvas(canvas);
-  clearChart(ctx, canvas, "Earning curve");
+  clearChart(ctx, canvas, "");
   const values = (points || []).map((point) => Number(point.pnl || 0));
   if (!values.length) {
+    clearChartHover(canvas);
     ctx.fillStyle = cssVar("--muted");
     ctx.font = "12px system-ui";
     ctx.fillText("No earning history yet", 12, 54);
     return;
   }
-  const pad = 34;
-  const min = Math.min(-1, ...values) * 1.08;
-  const max = Math.max(1, ...values) * 1.08;
+  const pad = { left: 76, right: 18, top: 18, bottom: 28 };
+  const { min, max } = moneyBounds(values);
+  drawMoneyYAxis(ctx, min, max, pad, ctx.logicalWidth, ctx.logicalHeight);
   drawLine(ctx, values, min, max, pad, ctx.logicalWidth, ctx.logicalHeight, "#2f6df6");
-  const zeroY = ctx.logicalHeight - pad - ((0 - min) / Math.max(0.001, max - min)) * (ctx.logicalHeight - pad * 2);
-  ctx.strokeStyle = cssVar("--line");
-  ctx.beginPath();
-  ctx.moveTo(pad, zeroY);
-  ctx.lineTo(ctx.logicalWidth - pad, zeroY);
-  ctx.stroke();
-  ctx.fillStyle = values[values.length - 1] >= 0 ? cssVar("--green") : cssVar("--red");
-  ctx.font = "11px system-ui";
-  ctx.fillText(fmtSignedMoney(values[values.length - 1]), 12, ctx.logicalHeight - 12);
+  drawMoneyNodes(ctx, values, min, max, pad, ctx.logicalWidth, ctx.logicalHeight, "#2f6df6");
+  setMoneyChartHover(canvas, points || [], values, min, max, pad);
 }
 
 function drawEvalReportCurve(canvas, points, title) {
   const ctx = setupCanvas(canvas);
-  clearChart(ctx, canvas, title);
+  clearChart(ctx, canvas, "");
   const values = (points || []).map((point) => Number(point.pnl || 0));
   if (!values.length) {
+    clearChartHover(canvas);
     ctx.fillStyle = cssVar("--muted");
     ctx.font = "12px system-ui";
     ctx.fillText("No eval report history yet", 12, 54);
     return;
   }
-  const pad = 32;
-  const min = Math.min(-1, ...values) * 1.08;
-  const max = Math.max(1, ...values) * 1.08;
+  const pad = { left: 76, right: 18, top: 18, bottom: 28 };
+  const { min, max } = moneyBounds(values);
+  drawMoneyYAxis(ctx, min, max, pad, ctx.logicalWidth, ctx.logicalHeight);
   drawLine(ctx, values, min, max, pad, ctx.logicalWidth, ctx.logicalHeight, "#1b8f62");
-  const zeroY = ctx.logicalHeight - pad - ((0 - min) / Math.max(0.001, max - min)) * (ctx.logicalHeight - pad * 2);
-  ctx.strokeStyle = cssVar("--line");
-  ctx.beginPath();
-  ctx.moveTo(pad, zeroY);
-  ctx.lineTo(ctx.logicalWidth - pad, zeroY);
-  ctx.stroke();
-  ctx.fillStyle = values[values.length - 1] >= 0 ? cssVar("--green") : cssVar("--red");
+  drawMoneyNodes(ctx, values, min, max, pad, ctx.logicalWidth, ctx.logicalHeight, "#1b8f62");
+  setMoneyChartHover(canvas, points || [], values, min, max, pad);
+}
+
+function moneyBounds(values) {
+  let min = Math.min(0, ...values);
+  let max = Math.max(0, ...values);
+  if (Math.abs(max - min) < 0.01) {
+    min -= 1;
+    max += 1;
+  }
+  const span = max - min;
+  return {
+    min: min - span * 0.18,
+    max: max + span * 0.18,
+  };
+}
+
+function drawMoneyYAxis(ctx, min, max, pad, w, h) {
+  const x0 = pad.left;
+  const x1 = w - pad.right;
+  const y0 = h - pad.bottom;
+  const y1 = pad.top;
+  const ticks = [
+    { value: max, label: fmtSignedMoney(max) },
+    { value: min, label: fmtSignedMoney(min) },
+  ];
+  if (min < 0 && max > 0) {
+    ticks.splice(1, 0, { value: 0, label: "$0.00" });
+  }
+
   ctx.font = "11px system-ui";
-  ctx.fillText(fmtSignedMoney(values[values.length - 1]), 12, ctx.logicalHeight - 12);
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ticks.forEach((tick) => {
+    const y = y0 - ((tick.value - min) / Math.max(0.001, max - min)) * (y0 - y1);
+    ctx.strokeStyle = tick.value === 0 ? cssVar("--line") : colorMixLine();
+    ctx.lineWidth = tick.value === 0 ? 1.5 : 1;
+    ctx.beginPath();
+    ctx.moveTo(x0, y);
+    ctx.lineTo(x1, y);
+    ctx.stroke();
+    ctx.fillStyle = moneyAxisColor(tick.value);
+    ctx.fillText(tick.label, x0 - 8, y);
+  });
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+function moneyAxisColor(value) {
+  if (value > 0.005) return cssVar("--green");
+  if (value < -0.005) return cssVar("--red");
+  return cssVar("--muted");
+}
+
+function colorMixLine() {
+  return document.body.dataset.theme === "dark" ? "rgba(143, 160, 152, 0.22)" : "#edf1f4";
+}
+
+function drawMoneyNodes(ctx, values, min, max, pad, w, h, color) {
+  const left = pad.left;
+  const y0 = h - pad.bottom;
+  const spanX = w - pad.left - pad.right;
+  const spanY = h - pad.top - pad.bottom;
+  values.forEach((value, idx) => {
+    const x = left + (idx / Math.max(1, values.length - 1)) * spanX;
+    const y = y0 - ((value - min) / Math.max(0.001, max - min)) * spanY;
+    ctx.beginPath();
+    ctx.fillStyle = cssVar("--panel");
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  });
+}
+
+function clearChartHover(canvas) {
+  if (!canvas) return;
+  canvas.onmousemove = null;
+  canvas.onmouseleave = null;
+}
+
+function setMoneyChartHover(canvas, points, values, min, max, pad) {
+  if (!canvas || !values.length) return;
+  const tooltip = chartTooltip();
+  canvas.onmousemove = (event) => {
+    const rect = canvas.getBoundingClientRect();
+    const left = pad.left;
+    const right = canvas.clientWidth - pad.right;
+    const x = Math.max(left, Math.min(right, event.clientX - rect.left));
+    const idx = Math.round(((x - left) / Math.max(1, right - left)) * (values.length - 1));
+    const value = values[Math.max(0, Math.min(values.length - 1, idx))];
+    const point = points[idx] || {};
+    const y0 = canvas.clientHeight - pad.bottom;
+    const y = y0 - ((value - min) / Math.max(0.001, max - min)) * (canvas.clientHeight - pad.top - pad.bottom);
+    tooltip.innerHTML = `
+      <strong>${fmtMaybeSignedMoney(value)}</strong>
+      <span>${escapeHtml(chartPointTime(point))}</span>
+    `;
+    tooltip.style.left = `${Math.min(window.innerWidth - 156, Math.max(8, rect.left + x + 10))}px`;
+    tooltip.style.top = `${Math.min(window.innerHeight - 64, Math.max(8, rect.top + y - 38))}px`;
+    tooltip.classList.add("visible");
+  };
+  canvas.onmouseleave = () => {
+    tooltip.classList.remove("visible");
+  };
+}
+
+function chartTooltip() {
+  let tooltip = document.getElementById("chartTooltip");
+  if (tooltip) return tooltip;
+  tooltip = document.createElement("div");
+  tooltip.id = "chartTooltip";
+  tooltip.className = "chart-tooltip";
+  document.body.appendChild(tooltip);
+  return tooltip;
+}
+
+function chartPointTime(point) {
+  const value = point.at || point.created_at || point.timestamp || point.source || "";
+  if (!value) return "point";
+  const date = new Date(value);
+  if (!Number.isNaN(date.getTime())) return date.toLocaleString();
+  return String(value);
 }
 
 function setupCanvas(canvas) {
@@ -1374,6 +1650,7 @@ function clearChart(ctx, canvas, title) {
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = cssVar("--panel");
   ctx.fillRect(0, 0, width, height);
+  if (!title) return;
   ctx.fillStyle = cssVar("--text");
   ctx.font = "600 13px system-ui";
   ctx.fillText(title, 12, 22);
@@ -1484,6 +1761,10 @@ function escapeAttr(value) {
   return escapeHtml(value || "#");
 }
 
+function normalizeUserSection(section) {
+  return section === "maintainer" ? "positions" : (section || "overview");
+}
+
 function setPage(page) {
   logControl("page switch", { targetPage: page });
   app.page = page === "user" ? "user" : "markets";
@@ -1493,10 +1774,18 @@ function setPage(page) {
 }
 
 function setUserSection(section) {
-  logControl("user section switch", { section });
-  app.userSection = section || "overview";
+  const normalized = normalizeUserSection(section);
+  logControl("user section switch", { section: normalized });
+  app.userSection = normalized;
   localStorage.setItem("beatodds-user-section", app.userSection);
   renderUserPage();
+}
+
+function setLanguage(language) {
+  app.language = language === "zh" ? "zh" : "en";
+  localStorage.setItem("beatodds-language", app.language);
+  applyLanguage();
+  if (app.state) renderUserPage();
 }
 
 function toggleExposureEvent(kind, eventId) {
@@ -1508,6 +1797,7 @@ function toggleExposureEvent(kind, eventId) {
 
 function bindEvents() {
   applyTheme(app.theme);
+  applyLanguage();
   if (window.innerWidth < 980) {
     $("appShell").classList.add("right-collapsed");
   }
@@ -1587,12 +1877,15 @@ function bindEvents() {
   $("maintainerSellBtn").addEventListener("click", () => runMaintainerAction("sell"));
   $("maintainerBuyBtn").addEventListener("click", () => runMaintainerAction("purchase"));
   $("maintainerRunBtn").addEventListener("click", () => runMaintainerAction("maintain"));
-  $("manualSellSelectAllBtn").addEventListener("click", selectAllManualSell);
-  $("manualSellClearBtn").addEventListener("click", clearManualSellSelection);
-  $("manualSellSelectedBtn").addEventListener("click", runManualSellSelected);
-  $("manualSellAllBtn").addEventListener("click", runManualSellAll);
+  if ($("manualSellSelectAllBtn")) $("manualSellSelectAllBtn").addEventListener("click", selectAllManualSell);
+  if ($("manualSellClearBtn")) $("manualSellClearBtn").addEventListener("click", clearManualSellSelection);
+  if ($("manualSellSelectedBtn")) $("manualSellSelectedBtn").addEventListener("click", runManualSellSelected);
+  if ($("manualSellAllBtn")) $("manualSellAllBtn").addEventListener("click", runManualSellAll);
   $("themeToggle").addEventListener("click", () => {
     applyTheme(app.theme === "dark" ? "light" : "dark");
+  });
+  $("languageToggle").addEventListener("click", () => {
+    setLanguage(app.language === "zh" ? "en" : "zh");
   });
   $("marketSearch").addEventListener("input", (event) => {
     app.search = event.target.value;
@@ -1671,11 +1964,13 @@ function bindEvents() {
   });
   $("clearTopicBtn").addEventListener("click", () => post("/api/clear-topic", { condition_id: app.selectedMarketId }));
   $("clearAllBtn").addEventListener("click", () => post("/api/clear-all", {}));
-  $("positionList").addEventListener("click", (event) => {
-    const button = event.target.closest(".event-exposure-head[data-event-id]");
-    if (!button) return;
-    toggleExposureEvent("position", button.dataset.eventId);
-  });
+  if ($("positionList")) {
+    $("positionList").addEventListener("click", (event) => {
+      const button = event.target.closest(".event-exposure-head[data-event-id]");
+      if (!button) return;
+      toggleExposureEvent("position", button.dataset.eventId);
+    });
+  }
   $("tradeList").addEventListener("click", (event) => {
     const button = event.target.closest(".event-exposure-head[data-event-id]");
     if (!button) return;
@@ -1836,6 +2131,61 @@ function updateDialogState() {
   }
 }
 
+function setText(id, value) {
+  const el = $(id);
+  if (el) el.textContent = value;
+}
+
+function applyLanguage() {
+  document.documentElement.lang = app.language === "zh" ? "zh" : "en";
+  setText("languageToggle", t("languageToggle"));
+  const navLabels = {
+    overview: t("userNavOverview"),
+    profile: t("userNavProfile"),
+    funds: t("userNavFunds"),
+    positions: t("userNavPositions"),
+    agent: t("userNavAgent"),
+  };
+  document.querySelectorAll(".user-nav-btn[data-user-section]").forEach((button) => {
+    button.textContent = navLabels[button.dataset.userSection] || button.textContent;
+  });
+  setText("refreshPositionsBtn", t("refreshPositions"));
+  setText("maintainerUpdateBtn", t("manualUpdate"));
+  setText("maintainerSellBtn", t("sell"));
+  setText("maintainerBuyBtn", t("purchase"));
+  setText("maintainerRunBtn", t("maintain"));
+  const dryRunLabel = $("maintainerDryRun")?.closest("label")?.querySelector("span");
+  if (dryRunLabel) dryRunLabel.textContent = t("dryRun");
+
+  const positionsSection = $("userPositionsSection");
+  if (positionsSection) {
+    const eyebrow = positionsSection.querySelector(".user-section-toolbar .eyebrow");
+    const title = positionsSection.querySelector(".user-section-toolbar h2");
+    if (eyebrow) eyebrow.textContent = t("positionsEyebrow");
+    if (title) title.textContent = t("positionsTitle");
+    const panels = positionsSection.querySelectorAll(".panel-head.tight");
+    panels.forEach((panel) => {
+      const heading = panel.querySelector("h3");
+      if (!heading) return;
+      if (heading.textContent.includes("Earning") || heading.textContent.includes("收益")) {
+        heading.textContent = t("earningCurve");
+      } else if (heading.textContent.includes("Strategy") || heading.textContent.includes("策略")) {
+        heading.textContent = t("strategy");
+      } else if (heading.textContent.includes("Current shares") || heading.textContent.includes("当前持仓")) {
+        heading.textContent = t("currentSharesTitle");
+      } else if (heading.textContent.includes("Maintainer") || heading.textContent.includes("维护器")) {
+        heading.textContent = t("maintainerConsole");
+      }
+    });
+  }
+  const profileHead = $("userProfileSection")?.querySelector(".panel-head h3");
+  if (profileHead) profileHead.textContent = t("settings");
+  const fundsHead = $("userFundsSection")?.querySelector(".panel-head h3");
+  if (fundsHead) fundsHead.textContent = t("funds");
+  const fundsSub = $("userFundsSection")?.querySelector(".panel-head span");
+  if (fundsSub) fundsSub.textContent = t("localLedger");
+}
+
 async function runMaintainerAction(action, extraPayload = {}) {
   if (app.maintainerRunning) return;
   app.maintainerRunning = true;
@@ -1906,7 +2256,9 @@ function setMaintainerButtons(disabled, action) {
   ].forEach((id) => {
     if ($(id)) $(id).disabled = disabled;
   });
-  $("maintainerStatusPill").textContent = disabled ? `${action}...` : "ready";
+  if ($("maintainerStatusPill")) {
+    $("maintainerStatusPill").textContent = disabled ? `${action}...` : "ready";
+  }
   if (!disabled) updateManualSellButtons();
 }
 

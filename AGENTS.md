@@ -201,18 +201,29 @@ As of 2026-05-25:
   positions fall back to cost basis. Maintainer strategy money snapshots also
   include `open_marked_value`, `open_marked_pnl`, `open_marked_count`, and
   `total_marked_money`.
-  The User page `持仓与交易` current-hold groups also use live marked hold PnL
-  (`current_pnl`) instead of projected forecast-edge PnL when marks are
-  available, and row details show live bid/cost-fallback mark source plus
-  current hold value.
-  The historical trade-record groups intentionally show forecast-time
-  `expected edge`, not realized/current earnings; the GUI labels and muted
-  styling distinguish this from current hold PnL so expected model upside does
-  not look like earned money.
+  The User page `持仓与交易` current-hold groups use real marked hold PnL
+  (`current_pnl`) only; they no longer fall back to projected forecast-edge
+  money. Rows without a current mark show `--` and an `unmarked` source.
+  The User page `持仓与交易` trade-record groups no longer show forecast-time
+  `expected edge` as a money result. They match each trade to the current open
+  position by `condition_id:side` and display the real current hold PnL when
+  marked; closed or unmarked trades show `--`.
   The Maintainer earning curve appends an explicit latest
   `source=live_hold_mark` point using current live-bid share value and open
   hold PnL; older transaction points remain ledger cost-basis snapshots instead
   of being backfilled with today's live mark.
+  The money-based earning charts rely on the surrounding panel heading for
+  title text and draw explicit min/max y-axis money labels, plus a zero line
+  when the range crosses zero, so users can read scale without duplicate chart
+  titles. The earning/eval curves also draw point nodes with hover tooltips
+  showing PnL at that time, use looser vertical padding, and color positive
+  y-axis labels green and negative labels red.
+  The standalone User > Maintainer nav entry was merged into User >
+  Current shares. The page now renders the earning curve and strategy summary
+  above the current-shares ledger, with strategy decisions as a foldable list
+  inside that same ledger card. The separate current-hold/manual-sell card and
+  separate strategy-decision card are no longer shown in the GUI. The account
+  page defaults to English and has a top-bar language toggle for Chinese labels.
   GUI initial `/api/state` intentionally avoids live account position marking
   so page reload is not blocked by many CLOB order-book requests. User-page
   live marks load through `/api/account-context` after first render, and

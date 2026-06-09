@@ -1403,6 +1403,38 @@ canvas {
   background: var(--panel);
 }
 
+.chart-tooltip {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  gap: 2px;
+  min-width: 118px;
+  padding: 7px 9px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.chart-tooltip.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.chart-tooltip strong {
+  font-size: 13px;
+}
+
+.chart-tooltip span {
+  color: var(--muted);
+}
+
 .data-status {
   margin-top: 10px;
   padding: 9px 10px;
@@ -1878,6 +1910,48 @@ canvas {
   gap: 8px;
   max-height: 420px;
   overflow-y: auto;
+}
+
+.merged-decision-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.merged-decision-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.merged-decision-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  font-weight: 800;
+}
+
+.merged-decision-toggle span {
+  width: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.merged-decision-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.merged-decision-body {
+  display: grid;
+  gap: 8px;
 }
 
 .transaction-row,

@@ -19,6 +19,7 @@
         <button class="btn" id="updateAllBtn">Update + forecast all</button>
         <button class="btn secondary" id="marketsPageBtn">Markets</button>
         <button class="btn secondary" id="userPageBtn">User</button>
+        <button class="btn secondary" id="languageToggle">中文</button>
         <button class="btn secondary" id="themeToggle">Dark</button>
         <button class="btn secondary" id="refreshBtn">Refresh</button>
         <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
@@ -269,10 +270,9 @@
         </div>
         <nav class="user-nav" aria-label="User sections">
           <button class="user-nav-btn active" data-user-section="overview">Overview</button>
-          <button class="user-nav-btn" data-user-section="profile">基础设置</button>
-          <button class="user-nav-btn" data-user-section="funds">资金管理</button>
-          <button class="user-nav-btn" data-user-section="positions">持仓与交易</button>
-          <button class="user-nav-btn" data-user-section="maintainer">Maintainer</button>
+          <button class="user-nav-btn" data-user-section="profile">Settings</button>
+          <button class="user-nav-btn" data-user-section="funds">Funds</button>
+          <button class="user-nav-btn" data-user-section="positions">Current shares</button>
           <button class="user-nav-btn" data-user-section="agent">Agent Pattern</button>
         </nav>
         <div class="account-switcher">
@@ -333,7 +333,7 @@
         <section class="user-section hidden" id="userProfileSection">
           <div class="detail-block user-block">
             <div class="panel-head tight">
-              <h3>基础设置</h3>
+              <h3>Settings</h3>
               <span>name / icon / notes</span>
             </div>
             <div class="form-grid">
@@ -358,7 +358,7 @@
           <div class="user-grid two">
             <section class="detail-block user-block">
               <div class="panel-head tight">
-                <h3>资金管理</h3>
+                <h3>Funds</h3>
                 <span>local paper ledger</span>
               </div>
               <div class="form-grid compact">
@@ -390,37 +390,11 @@
           <div class="user-section-toolbar">
             <div>
               <p class="eyebrow">Account Ledger</p>
-              <h2>持仓与交易</h2>
+              <h2>Current shares</h2>
             </div>
             <button class="btn secondary" id="refreshPositionsBtn">Refresh positions</button>
           </div>
           <div class="account-money-strip" id="accountMoneyStrip"></div>
-          <div class="user-grid two">
-            <section class="detail-block user-block">
-              <div class="panel-head tight">
-                <h3>当前持仓</h3>
-                <span id="positionStatus">simulated exposure</span>
-              </div>
-              <div class="position-list" id="positionList"></div>
-            </section>
-            <section class="detail-block user-block">
-              <div class="panel-head tight">
-                <h3>历史 Trade 记录</h3>
-                <span id="tradeStatus">paper deals</span>
-              </div>
-              <div class="trade-list" id="tradeList"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="user-section hidden" id="userMaintainerSection">
-          <div class="user-hero">
-            <div>
-              <p class="eyebrow">Paper Maintainer</p>
-              <h2>Strategy Control</h2>
-            </div>
-            <div class="pill" id="maintainerStatusPill">idle</div>
-          </div>
           <div class="user-grid two">
             <section class="detail-block user-block">
               <div class="panel-head tight">
@@ -447,26 +421,14 @@
               <div class="strategy-grid" id="strategyGrid"></div>
             </section>
           </div>
-          <div class="user-grid two">
+          <div class="user-grid">
             <section class="detail-block user-block">
               <div class="panel-head tight">
-                <h3>Current Share Hold</h3>
-                <span id="maintainerPositionStatus">formal ledger</span>
+                <h3>Current shares</h3>
+                <span id="tradeStatus">paper deals</span>
               </div>
-              <div class="manual-sell-toolbar">
-                <button class="btn secondary" id="manualSellSelectAllBtn">Select all</button>
-                <button class="btn secondary" id="manualSellClearBtn">Clear</button>
-                <button class="btn danger" id="manualSellSelectedBtn">Sell selected</button>
-                <button class="btn danger" id="manualSellAllBtn">Sell all holds</button>
-              </div>
-              <div class="position-list" id="maintainerPositionList"></div>
-            </section>
-            <section class="detail-block user-block">
-              <div class="panel-head tight">
-                <h3>Strategy Decisions</h3>
-                <span id="maintainerDecisionStatus">jsonl log</span>
-              </div>
-              <div class="trade-list" id="maintainerDecisionList"></div>
+              <div class="trade-list" id="tradeList"></div>
+              <div class="merged-decision-list" id="mergedDecisionList"></div>
             </section>
           </div>
           <section class="detail-block user-block">
