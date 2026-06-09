@@ -1100,6 +1100,26 @@ body:has(.app-shell.right-collapsed) #showRight {
   margin-bottom: 10px;
 }
 
+.manual-sell-inline {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.manual-sell-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.manual-sell-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .manual-sell-toolbar .btn {
   min-height: 34px;
   padding: 0 8px;
@@ -1149,6 +1169,10 @@ body:has(.app-shell.right-collapsed) #showRight {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.position-list.compact {
+  max-height: 260px;
 }
 
 .mini-stat {

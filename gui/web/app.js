@@ -19,7 +19,10 @@ const app = {
   expandedTradeEvents: new Set(),
   selectedManualSell: new Set(),
   strategyDecisionsOpen: localStorage.getItem("beatodds-strategy-decisions-open") !== "0",
+  accountMarksRefreshing: false,
+  accountMarksReady: false,
   maintainerRunning: false,
+  maintainerAction: "",
   maintainerPoll: null,
 };
 
@@ -75,6 +78,16 @@ const I18N = {
     hideTrades: "Hide shares",
     showTrades: "Show shares",
     closedOrUnmarked: "closed or unmarked",
+    manualSell: "Manual sell",
+    selectAll: "Select all",
+    clear: "Clear",
+    sellSelected: "Sell selected",
+    sellAllHolds: "Sell all holds",
+    loadingCurrentPnl: "Refreshing current PnL...",
+    openPositionsSelected: "open positions",
+    selected: "selected",
+    noOpenShares: "No open shares for this account.",
+    costFallback: "cost fallback",
   },
   zh: {
     languageToggle: "English",
@@ -125,6 +138,16 @@ const I18N = {
     hideTrades: "收起持仓",
     showTrades: "展开持仓",
     closedOrUnmarked: "已平仓或未标记",
+    manualSell: "手动卖出",
+    selectAll: "全选",
+    clear: "清除",
+    sellSelected: "卖出所选",
+    sellAllHolds: "卖出全部持仓",
+    loadingCurrentPnl: "正在刷新当前盈亏...",
+    openPositionsSelected: "个开放持仓",
+    selected: "已选择",
+    noOpenShares: "该账户暂无开放持仓。",
+    costFallback: "成本回退",
   },
 };
 
@@ -236,10 +259,18 @@ async function refreshAccountPositions(source = "positions section") {
 
 async function refreshAccountMarks() {
   if (!app.state || app.page !== "user") return;
-  const payload = await api("/api/account-context");
-  if (!payload.account_context) return;
-  app.state.account_context = payload.account_context;
-  render();
+  app.accountMarksRefreshing = true;
+  app.accountMarksReady = false;
+  renderUserPage();
+  try {
+    const payload = await api("/api/account-context");
+    if (!payload.account_context) return;
+    app.state.account_context = payload.account_context;
+    app.accountMarksReady = true;
+  } finally {
+    app.accountMarksRefreshing = false;
+    render();
+  }
 }
 
 async function post(path, payload) {
@@ -515,6 +546,7 @@ function renderUserPage() {
   $("tradeList").innerHTML = tradeGroups.length
     ? renderEventTradeGroups(tradeGroups, positions)
     : `<div class="empty-panel">${escapeHtml(t("noTradeRecords"))}</div>`;
+  renderManualSellPanel(positions);
   renderMergedStrategyDecisions(strategyDecisions);
 
   if (app.page === "user") drawUserNavChart($("userNavChart"), context.nav_points || []);
@@ -564,8 +596,9 @@ function renderMaintainerSection(context) {
   const params = maintainer.params || {};
   const decisions = maintainer.recent_decisions || [];
   const consoleLogs = maintainer.console_logs || [];
-  $("earningStatus").textContent =
-    `${fmtSignedMoney(stats.open_marked_pnl || 0)} · ${fmtMoney(stats.open_marked_value || 0)} ${t("currentHolds")}`;
+  $("earningStatus").textContent = app.accountMarksRefreshing
+    ? t("loadingCurrentPnl")
+    : `${fmtSignedMoney(stats.open_marked_pnl || 0)} · ${fmtMoney(stats.open_marked_value || 0)} ${t("currentHolds")}`;
   $("strategyStatus").textContent = summary.last_finished_at
     ? new Date(summary.last_finished_at).toLocaleString()
     : (app.language === "zh" ? "暂无完成运行" : "no completed run");
@@ -588,6 +621,42 @@ function renderMaintainerSection(context) {
   renderMaintainerConsole("overviewMaintainerConsole", "overviewMaintainerConsoleStatus", consoleLogs);
   renderMaintainerConsole("maintainerConsole", "maintainerConsoleStatus", consoleLogs);
   if (app.page === "user") drawEarningChart($("earningCurveChart"), context.earning_points || []);
+  setMaintainerButtons(app.maintainerRunning, app.maintainerAction);
+}
+
+function renderManualSellPanel(positions) {
+  const list = $("maintainerPositionList");
+  if (!list) return;
+  const validKeys = new Set((positions || []).map((pos) => positionKey(pos)));
+  app.selectedManualSell = new Set(
+    Array.from(app.selectedManualSell).filter((key) => validKeys.has(key)),
+  );
+  $("manualSellTitle").textContent = t("manualSell");
+  $("maintainerPositionStatus").textContent = app.accountMarksRefreshing
+    ? t("loadingCurrentPnl")
+    : `${positions.length} ${t("openPositionsSelected")} · ${app.selectedManualSell.size} ${t("selected")}`;
+  list.innerHTML = positions.length
+    ? positions.map((pos) => {
+      const key = positionKey(pos);
+      const selected = app.selectedManualSell.has(key);
+      const markSource = pos.mark_source === "live_bid"
+        ? `bid ${fmtToken(pos.current_bid)}`
+        : t("costFallback");
+      return `
+        <label class="manual-sell-card ${selected ? "selected" : ""}">
+          <input class="manual-sell-check" type="checkbox" data-key="${escapeAttr(key)}" ${selected ? "checked" : ""} />
+          <span class="manual-sell-main">
+            <strong>${escapeHtml(pos.question || shortId(pos.condition_id))}</strong>
+            <small>${escapeHtml(pos.side || "YES")} · ${fmtSize(pos.shares)} shares · avg ${fmtToken(pos.avg_price)} · ${fmtMoney(pos.current_value ?? pos.notional)} hold value</small>
+          </span>
+          <span class="manual-sell-side">${escapeHtml(markSource)}</span>
+          <b class="${pnlClass(pos.current_pnl)}">${fmtMaybeSignedMoney(pos.current_pnl)}</b>
+        </label>
+      `;
+    }).join("")
+    : `<div class="empty-panel">${escapeHtml(t("noOpenShares"))}</div>`;
+  bindManualSellChecks();
+  updateManualSellButtons();
 }
 
 function renderMergedStrategyDecisions(decisions) {
@@ -665,32 +734,33 @@ function bindManualSellChecks() {
       if (!key) return;
       if (checkbox.checked) app.selectedManualSell.add(key);
       else app.selectedManualSell.delete(key);
-      renderMaintainerSection(app.state.account_context || {});
+      renderManualSellPanel(app.state.account_context?.positions || []);
     });
   });
 }
 
 function updateManualSellButtons() {
   const hasPositions = (app.state.account_context?.positions || []).length > 0;
+  const loading = app.accountMarksRefreshing || !app.accountMarksReady;
   const selectedBtn = $("manualSellSelectedBtn");
   const allBtn = $("manualSellAllBtn");
   const selectAllBtn = $("manualSellSelectAllBtn");
   const clearBtn = $("manualSellClearBtn");
-  if (selectedBtn) selectedBtn.disabled = app.maintainerRunning || app.selectedManualSell.size === 0;
-  if (allBtn) allBtn.disabled = app.maintainerRunning || !hasPositions;
-  if (selectAllBtn) selectAllBtn.disabled = app.maintainerRunning || !hasPositions;
-  if (clearBtn) clearBtn.disabled = app.maintainerRunning || app.selectedManualSell.size === 0;
+  if (selectedBtn) selectedBtn.disabled = loading || app.maintainerRunning || app.selectedManualSell.size === 0;
+  if (allBtn) allBtn.disabled = loading || app.maintainerRunning || !hasPositions;
+  if (selectAllBtn) selectAllBtn.disabled = loading || app.maintainerRunning || !hasPositions;
+  if (clearBtn) clearBtn.disabled = loading || app.maintainerRunning || app.selectedManualSell.size === 0;
 }
 
 function selectAllManualSell() {
   const positions = app.state.account_context?.positions || [];
   positions.forEach((pos) => app.selectedManualSell.add(positionKey(pos)));
-  renderMaintainerSection(app.state.account_context || {});
+  renderManualSellPanel(positions);
 }
 
 function clearManualSellSelection() {
   app.selectedManualSell.clear();
-  renderMaintainerSection(app.state.account_context || {});
+  renderManualSellPanel(app.state.account_context?.positions || []);
 }
 
 function renderEventPositionGroups(groups) {
@@ -1767,10 +1837,16 @@ function normalizeUserSection(section) {
 
 function setPage(page) {
   logControl("page switch", { targetPage: page });
+  const previousPage = app.page;
   app.page = page === "user" ? "user" : "markets";
   localStorage.setItem("beatodds-page", app.page);
   render();
   if (app.page === "markets") refreshSelectedMarketDetail();
+  if (app.page === "user" && app.state && previousPage !== "user") {
+    refreshAccountMarks().catch((error) => {
+      console.warn("[BeatOdds] account mark refresh failed", error);
+    });
+  }
 }
 
 function setUserSection(section) {
@@ -1779,6 +1855,11 @@ function setUserSection(section) {
   app.userSection = normalized;
   localStorage.setItem("beatodds-user-section", app.userSection);
   renderUserPage();
+  if (app.page === "user" && normalized === "positions") {
+    refreshAccountMarks().catch((error) => {
+      console.warn("[BeatOdds] account mark refresh failed", error);
+    });
+  }
 }
 
 function setLanguage(language) {
@@ -2154,6 +2235,11 @@ function applyLanguage() {
   setText("maintainerSellBtn", t("sell"));
   setText("maintainerBuyBtn", t("purchase"));
   setText("maintainerRunBtn", t("maintain"));
+  setText("manualSellSelectAllBtn", t("selectAll"));
+  setText("manualSellClearBtn", t("clear"));
+  setText("manualSellSelectedBtn", t("sellSelected"));
+  setText("manualSellAllBtn", t("sellAllHolds"));
+  setText("manualSellTitle", t("manualSell"));
   const dryRunLabel = $("maintainerDryRun")?.closest("label")?.querySelector("span");
   if (dryRunLabel) dryRunLabel.textContent = t("dryRun");
 
@@ -2189,6 +2275,7 @@ function applyLanguage() {
 async function runMaintainerAction(action, extraPayload = {}) {
   if (app.maintainerRunning) return;
   app.maintainerRunning = true;
+  app.maintainerAction = action;
   logControl("maintainer action started", {
     action,
     dryRun: $("maintainerDryRun").checked,
@@ -2216,6 +2303,7 @@ async function runMaintainerAction(action, extraPayload = {}) {
       app.maintainerPoll = null;
     }
     app.maintainerRunning = false;
+    app.maintainerAction = "";
     setMaintainerButtons(false, "");
     if (action === "manual_sell" && !$("maintainerDryRun").checked) {
       app.selectedManualSell.clear();
@@ -2244,6 +2332,8 @@ function runManualSellAll() {
 }
 
 function setMaintainerButtons(disabled, action) {
+  const loadingMarks = app.accountMarksRefreshing || !app.accountMarksReady;
+  const shouldDisable = disabled || loadingMarks;
   [
     "maintainerUpdateBtn",
     "maintainerSellBtn",
@@ -2254,10 +2344,10 @@ function setMaintainerButtons(disabled, action) {
     "manualSellSelectAllBtn",
     "manualSellClearBtn",
   ].forEach((id) => {
-    if ($(id)) $(id).disabled = disabled;
+    if ($(id)) $(id).disabled = shouldDisable;
   });
   if ($("maintainerStatusPill")) {
-    $("maintainerStatusPill").textContent = disabled ? `${action}...` : "ready";
+    $("maintainerStatusPill").textContent = disabled ? `${action}...` : (loadingMarks ? t("loadingCurrentPnl") : "ready");
   }
   if (!disabled) updateManualSellButtons();
 }

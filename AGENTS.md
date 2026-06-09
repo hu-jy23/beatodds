@@ -222,8 +222,14 @@ As of 2026-05-25:
   Current shares. The page now renders the earning curve and strategy summary
   above the current-shares ledger, with strategy decisions as a foldable list
   inside that same ledger card. The separate current-hold/manual-sell card and
-  separate strategy-decision card are no longer shown in the GUI. The account
-  page defaults to English and has a top-bar language toggle for Chinese labels.
+  separate strategy-decision card are no longer shown in the GUI, but manual
+  sell controls are restored inline inside the Current shares card with
+  select-all, clear, sell-selected, and sell-all actions. The account page
+  defaults to English and has a top-bar language toggle for Chinese labels.
+  Entering the User/account page or Current shares section automatically
+  refreshes live current-hold PnL through `/api/account-context`; maintainer
+  action buttons and manual-sell buttons stay disabled in a loading state until
+  that current-PnL mark refresh completes.
   GUI initial `/api/state` intentionally avoids live account position marking
   so page reload is not blocked by many CLOB order-book requests. User-page
   live marks load through `/api/account-context` after first render, and
