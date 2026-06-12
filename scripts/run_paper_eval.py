@@ -57,6 +57,8 @@ def _mark_to_dict(mark) -> dict:
         "cost_basis": mark.cost_basis,
         "pnl": mark.pnl,
         "return_pct": mark.return_pct,
+        "mark_source": mark.mark_source,
+        "quote_time": mark.quote_time.isoformat() if mark.quote_time else "",
         "created_at": decision.created_at.isoformat() if decision.created_at else "",
         "marked_at": mark.marked_at.isoformat(),
     }
@@ -80,7 +82,8 @@ def _report_text(
         f"- Decision log: `{log_path}`",
         f"- Selection: {selector}",
         f"- Top K: {top_k}",
-        "- Market prices: refreshed from live CLOB order books during this run",
+        "- Market prices: live CLOB quotes when available; latest exact-token "
+        "history otherwise",
     ]
     if account_id:
         lines.append(f"- Account: `{account_id}`")
@@ -101,15 +104,16 @@ def _report_text(
         "",
         "## Decisions",
         "",
-        "| # | Status | Side | Confidence | Cost | Bid | PnL | Return | Question |",
-        "|---:|---|---|---:|---:|---:|---:|---:|---|",
+        "| # | Status | Source | Side | Confidence | Cost | Bid | PnL | Return | Question |",
+        "|---:|---|---|---|---:|---:|---:|---:|---:|---|",
     ])
     for idx, mark in enumerate(marks, start=1):
         decision = mark.decision
         bid = f"{mark.current_bid:.3f}" if mark.current_bid is not None else "?"
         question = decision.question.replace("|", "\\|").replace("\n", " ")
         lines.append(
-            f"| {idx} | {mark.status} | {decision.side} | {decision.confidence:.2f} | "
+            f"| {idx} | {mark.status} | {mark.mark_source or '-'} | {decision.side} | "
+            f"{decision.confidence:.2f} | "
             f"{_fmt_money(mark.cost_basis)} | {bid} | {_fmt_money(mark.pnl)} | "
             f"{_fmt_pct(mark.return_pct)} | {question[:140]} |"
         )
@@ -210,6 +214,14 @@ def _sell_candidates(
                 "mark": mark,
                 "eligible": False,
                 "reason": "no current bid mark",
+            })
+            continue
+        if mark.mark_source != "live_clob":
+            candidates.append({
+                "position": position,
+                "mark": mark,
+                "eligible": False,
+                "reason": "historical mark is not executable",
             })
             continue
 
@@ -366,7 +378,10 @@ def main() -> None:
         selected = [decision for decision in selected if decision.condition_id == args.condition_id]
     if args.side:
         selected = [decision for decision in selected if decision.side == args.side]
-    marks = mark_decisions_to_market(selected)
+    marks = mark_decisions_to_market(
+        selected,
+        report_dir=args.report_dir,
+    )
     summary = paper_mark_summary(marks)
 
     selector = "all" if top_k is None else f"top {top_k} by confidence"
@@ -401,7 +416,7 @@ def main() -> None:
         print(
             f"[{idx}] {mark.status:<16} conf={decision.confidence:.2f} "
             f"{decision.side:<3} cost={_fmt_money(mark.cost_basis)} "
-            f"bid={bid} pnl={pnl} ret={ret}"
+            f"bid={bid} pnl={pnl} ret={ret} source={mark.mark_source or '-'}"
         )
         print(f"    {decision.question[:100]}")
 

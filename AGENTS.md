@@ -295,6 +295,13 @@ As of 2026-05-25:
   CLI commands using `Scanner` accept `--scan-limit`, e.g.
   `uv run scripts/run_scanner.py --scan-limit 250 --top 5` or
   `uv run scripts/run_paper_trader.py --trial-aggressive --scan-limit 1000`.
+- As of 2026-06-12, `run_paper_eval.py` falls back to the latest stored
+  exact-token historical bid when the live CLOB order book has no usable bid.
+  When `--report-dir` is supplied, it first reads the newest matching prior
+  report JSON value for the same account, condition, side, and token, then
+  checks workflow `market_snapshots`, legacy `price_snapshots`, and
+  `price_history`. Reports include the mark source and quote time. Historical
+  marks are valuation-only and cannot trigger `--sell` fills.
 - Current uncommitted development includes:
   - `scripts/run_forecast.py`: sports and probability filters.
   - `scripts/run_batch_eval.py`: batch forecasting, stored records, manual
