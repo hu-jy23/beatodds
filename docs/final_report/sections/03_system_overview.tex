@@ -1,0 +1,19 @@
+\section{System Overview}
+
+BeatOdds separates control, inference, and durable state. Gamma supplies event and market metadata; the CLOB client supplies best bids, asks, and depth. The scanner filters the liquid universe and prioritizes markets with tight spreads, usable time-to-close, and structural relationships. The resolution parser converts natural-language rules into deadlines, entities, search queries, ambiguity scores, and risk flags. The evidence retriever queries external sources, freezes the evidence boundary, and hands source summaries to the LLM forecaster. The ranker applies side-aware execution costs before exposing a recommendation to the GUI or the paper ledger.
+
+\begin{figure}[t]
+\centering\small
+\fbox{\begin{minipage}{0.94\linewidth}
+\centering\textbf{Control and audit layer}\\[-1mm]
+markdown run protocol \quad $\longleftrightarrow$ \quad trajectory logs \quad $\longleftrightarrow$ \quad reviewable forecast report\\[2mm]
+\centering\textbf{Forecasting layer}\\[-1mm]
+Gamma + CLOB $\rightarrow$ scanner $\rightarrow$ resolution parser $\rightarrow$ evidence retrieval $\rightarrow$ LLM fair probability $\rightarrow$ ranker\\[2mm]
+\centering\textbf{State and execution layer}\\[-1mm]
+DuckDB markets / snapshots / evidence / forecasts $\longleftrightarrow$ GUI $\longleftrightarrow$ accounts / orders / fills / positions
+\end{minipage}}
+\caption{\textbf{BeatOdds architecture.} The online path produces a side-aware ranked signal; the state layer preserves the inputs, intermediate artifacts, and paper-trading consequences required for later evaluation.}
+\label{fig:architecture}
+\end{figure}
+
+This design follows the general decomposition of agent workflow frameworks into orchestration, agent, and tool layers \citep{miroflow2026}. Persisted market state is central to our setting: the same contract may be revisited days later, after evidence or prices change. The local event-centric GUI displays market cards, live book levels, evidence, fair-versus-market plots, and the selected account's holdings (Figure~\ref{fig:gui}).

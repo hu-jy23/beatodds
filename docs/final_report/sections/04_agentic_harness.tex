@@ -1,0 +1,19 @@
+\section{Agentic Evidence Harness}
+
+The evidence harness makes the agent's search process inspectable. At step $k$, the agent observes its workspace, records a reasoning note, selects a search or source-processing action, persists the resulting artifact, and then either continues or forecasts. We write this trajectory as
+\[
+q, r \rightarrow W \rightarrow (T_1, A_1, E_1) \rightarrow \cdots \rightarrow (T_K, A_K, E_K) \rightarrow (R, p_f),
+\]
+where $q$ is the question, $r$ the resolution rule, $W$ the run workspace, $T_k$ the internal reasoning state, $A_k$ an action, $E_k$ an evidence artifact, and $R$ the final report. The trajectory leaves an audit trail of attempted queries, accepted sources, rejected sources, and stopping decisions.
+
+\subsection{Evidence acquisition and source selection}
+
+The first action is not necessarily a web search. The parser produces candidate entities, jurisdiction, deadline, and resolution-sensitive terms; the controller uses these fields to construct a small query set. Retrieval collects a candidate pool before committing to any single article. For every item, the store preserves the issuing query and relevance score, so an auditor can distinguish an absent source from a source that was retrieved and rejected. Duplicate URLs are collapsed, and publication time is checked against the evidence cutoff. The current implementation uses Tavily for broad retrieval and can include official material, direct reporting, specialist commentary, and social/video artifacts in the same normalized evidence record.
+
+Social material is treated as a hypothesis generator. A post may point to a mechanism, a base rate, or a future catalyst that warrants further search; it cannot by itself settle an ambiguous market rule. The workflow tracks content depth (preview, full text, transcript, or processed report), author context when available, and the intended contribution to the probability estimate. This separation is useful when high-engagement content is persuasive but weakly sourced, and when a lower-visibility primary source provides the resolution-relevant fact.
+
+\subsection{Forecast synthesis, confidence, and recovery}
+
+The forecaster receives the market question, resolution text, frozen evidence, and the market quote, and returns $p_f$, a confidence score, a direction, and a short reasoning statement. The market quote is retained as a prior and execution reference. Evidence synthesis still determines whether the system has a defensible disagreement with the market. Confidence is operational: it suppresses large edges with sparse, contradictory, stale, or resolution-ambiguous evidence. The ranker subsequently subtracts the half-spread and fee model before prioritization.
+
+The harness also has explicit failure states. A failed parser falls back to the question as a search query; unavailable CLOB data can be recorded alongside stored Gamma outcome prices; and unsuccessful source processing becomes a coverage-gap artifact. Candidate pools, timeouts, and fallback outcomes are part of the run record. This resembles agentic forecasting systems that separate search from synthesis \citep{aiaforecaster2025}, with a strict evidence timestamp boundary and database provenance appropriate for live markets.

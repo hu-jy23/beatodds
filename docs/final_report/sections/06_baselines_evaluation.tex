@@ -1,0 +1,30 @@
+\section{Baselines and Evaluation}
+
+\textbf{Protocol.} Forecasts are saved before outcomes are known. The primary statistical comparison, after resolution, uses the market probability as a baseline. We track three systems:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Market-only}: $\hat p=p_m$.
+  \item \textbf{Search-only LLM}: evidence-grounded $\hat p=p_f$ without exposing market structure early in the prompt.
+  \item \textbf{Market+LLM}: a calibrated combination of the market and evidence forecast, with ranking based on executable net edge.
+\end{itemize}
+
+For resolved markets, Brier score is $\mathrm{BS}=N^{-1}\sum_i(\hat p_i-y_i)^2$ and Brier Skill Score is $\mathrm{BSS}=1-\mathrm{BS}_{\mathrm{ours}}/\mathrm{BS}_{\mathrm{market}}$. Positive BSS beats the market baseline. We also retain log loss, calibration curves, forecast-edge distributions, coverage, and ledger NAV. At the report cutoff the workflow store has 126 compact records and no resolved outcomes, so BSS is intentionally deferred. This limitation is stated explicitly because a forward study cannot evaluate outcome accuracy before markets settle.
+
+\begin{table}[t]
+\centering\small
+\caption{\textbf{Forward-evaluation state at the reporting cutoff.} Counts come from the local DuckDB stores. Outcome-dependent metrics are deferred until resolutions are recorded.}
+\label{tab:state}
+\begin{tabular}{lrr}
+\toprule
+Artifact & Count & Role \\
+\midrule
+Tracked markets & 65 & longitudinal market identity \\
+Forecast runs / snapshots & 151 / 151 & frozen prediction inputs \\
+Evidence items & 2,583 & source provenance \\
+Paper orders / fills & 58 / 63 & execution ledger \\
+Open paper positions & 34 & later mark and exit tracking \\
+Resolved outcomes & 0 & BSS not yet estimable \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Interim paper marks.} The \texttt{paper-self-1000} top-confidence evaluation on June 13 selected four positions: \$219.25 cost, \$301.85 marked value, and \$82.60 (+37.7\%) marked PnL. Three positions were positive and one negative. These marks use the latest public CLOB history at or before the cutoff and are historical midpoints; they demonstrate that the ledger and reporting path work. They are not executable return or an out-of-sample accuracy claim. A future resolved evaluation will ablate search depth, market-prior timing, and single-run versus ensemble forecasting.

@@ -1,6 +1,6 @@
 # BeatOdds 当前功能说明
 
-状态日期：2026-06-05
+状态日期：2026-06-10
 
 本文档说明当前仓库已经具备哪些能力、哪些文件支撑这些能力，以及本地
 DuckDB 数据库的现况。它用于项目交接和长期开发，不替代面向用户的
@@ -130,6 +130,9 @@ uv run scripts/run_scanner.py --top 10 --complete-groups
 - 将市场问题和 resolution text 转为结构化特征。
 - 抽取 condition type、key entities、deadline、search queries、oracle type、
   ambiguity score、risk flags。
+- 增加中国相关字段：`event_type`、`china_relevance`、`geography`、
+  `resolution_source_hint`、`source_routing_hints`。
+- parser 失败时也会用 deterministic heuristic 标出 China relevance 和 event type。
 - 通过配置支持 Anthropic、DeepSeek、OpenAI-compatible LLM 后端。
 
 支撑文件：
@@ -151,18 +154,34 @@ uv run scripts/run_scanner.py --top 10 --complete-groups
 
 能力：
 
-- 使用 Tavily 搜索外部证据。
+- 使用 provider-based retriever 搜索外部证据；默认 provider 是 Tavily。
 - 在任何 search call 之前设置 `evidence_frozen_at`。
 - 丢弃发布时间晚于 frozen time 的证据。
-- 为每条 evidence 保存其来源 search query。
+- 为每条 evidence 保存其来源 search query、provider、source type、可靠性先验、
+  resolution relevance 和 raw metadata。
+- 支持 `--china-info`：对中国相关市场追加中文 query expansion、官方 query 和
+  site/domain query；非中国相关市场不会触发 China routing。
 
 支撑文件：
 
 - `src/beatodds/evidence/retriever.py`
-  - `EvidenceRetriever.retrieve()` 执行 Tavily 查询并返回
+  - `EvidenceRetriever.retrieve()` 编排 provider 查询并返回
     `(evidence_items, evidence_frozen_at)`。
-  - 每个 `EvidenceItem` 已带 `query` 字段。
+  - 每个 `EvidenceItem` 已带 `query`、`provider`、`source_type`、
+    `resolution_relevance` 等字段。
   - 结果按 URL 去重，并按 relevance score 降序排序。
+- `src/beatodds/evidence/providers/base.py`
+  - 定义 `SearchQuery`、`SearchResult`、`SearchProvider`。
+- `src/beatodds/evidence/providers/tavily_provider.py`
+  - Tavily baseline provider。
+- `src/beatodds/evidence/providers/mock_provider.py`
+  - 单元测试和 fixture development 用 mock provider。
+- `src/beatodds/evidence/china_query.py`
+  - deterministic 中文 query expansion。
+- `src/beatodds/evidence/china_sources.py`
+  - 读取 `configs/china_sources.json`。
+- `src/beatodds/evidence/china_router.py`
+  - 根据 `event_type` 和 source hints 选择官方、监管、交易所、公司公告等来源。
 - `src/beatodds/common/types.py`
   - 定义 `EvidenceItem`。
 - `src/beatodds/evaluation/workflow_store.py`
@@ -172,13 +191,169 @@ uv run scripts/run_scanner.py --top 10 --complete-groups
 
 - `workflow_evidence_items` 表，字段包括 `run_id`、`condition_id`、`query`、
   `title`、`summary`、`url`、`source`、`published_at`、`retrieved_at`、
-  `relevance_score`。
+  `relevance_score`、`provider`、`source_type`、`direction`、`strength`、
+  `resolution_relevance`、`reliability_prior`、`dedupe_key`、`raw_metadata_json`。
 
 当前限制：
 
 - 本地旧 evidence rows 可能仍使用 fallback query，因为 query provenance 是第一轮 live run 后才补上的。
 
-### 6. 用 LLM 预测公平概率
+### 6. China-specific Local Agent Harness 基建
+
+能力：
+
+- 为每个 `event / market / agent_run` 创建独立 workspace。
+- 默认入口是 Markdown-first：`scripts/run_china_harness.py` 只创建 workspace、
+  `task.md`、`tool_manifest.md/json` 和 `codex_prompt.md`，不再启动 API 远程
+  agent 作为主循环。
+- 主 agent 预期是本地 Codex / `gpt-5.4-mini`，读取 `task.md` 后自己维护
+  `plan.md`、`trajectory.md`、`claims.md`、`audit.md` 和最终 report。
+- 将 agent loop 的 trajectory 写成 `trajectory.md` 和 `trajectory.jsonl`。
+- 将 search action 写入 `search_actions/`。
+- 将视频/社媒平台搜索的筛选前候选集写入 `source_visits/`，包括标题、
+  作者、URL、播放量、评论数、收藏数、点赞数、排序来源、状态和筛选理由。
+- 将有用 source 写成 `sources/{source_category}/source_card.md/json`。
+- 提供 `scripts/china_harness_tool.py`，本地 agent 可用命令调用 repo tools，
+  每次调用都会自动落盘 search action、source card、claim 和 trajectory step。
+- 提供 `search_web` access tool，可接 Tavily 或 MockSearchProvider。
+  - 默认过滤 Polymarket/PolyPredict 这类预测市场自引用页面，避免把 `p_m`
+    来源当作事实 evidence。
+  - 对 `foreign_crosscheck` 等 source category 过滤 YouTube/Facebook 等
+    social/video 结果；这些结果应通过 `expert_social` 显式处理。
+  - 对 search results 做 source quality 打分、过滤和重排；保留结果会在
+    `raw_metadata.search_quality` 记录 score/reasons，被过滤结果会进入
+    search action metadata 的 `rejected_quality`。
+  - quality scoring 会结合 query 和 market context 核心实体，减少宽泛官方
+    query 返回历史人物、站点目录、导航页的概率。
+- 提供 `export_source_registry`，把中国 source registry 写入 workspace。
+- 提供 `generate_china_queries`，生成候选中文、英文、site query。
+  - 已修复 Xi leadership case 中因为 `Central Military Commission` 误触发台海
+    query template 的问题。
+- 提供 `read_polymarket_context`，读取 run context 和本地 Polymarket DB 信息。
+- 提供 `model_baseline_forecast`。
+  - 默认测试/mock 路径使用 market-anchored fallback。
+  - 只有显式使用 `scripts/china_harness_tool.py --enable-llm-baseline` 时才允许
+    DeepSeek/OpenAI-compatible independent baseline。
+  - baseline confidence 上限为 0.75，`calibration_status` 固定为
+    `uncalibrated`，直到引入经验校准。
+- 提供 `process_resource`。
+  - LLM tool call 支持通过 `tool_call.url` 或 URL 型 `tool_call.query` 传入资源 URL。
+  - 对 YouTube / Bilibili URL 会检查 metadata、评论、字幕/正文可访问状态。
+  - 会在 `artifacts/resources/<resource>/` 写入 `resource_processor.json`、
+    `source_card.md`、`render_request.json`、`video_report_prompt.md`、
+    `subagent_spawn_prompt.md` 和 `artifact_index.md`。
+  - `render_request.json` 指定 `youtube-render-pdf` 或 `bilibili-render-pdf`、
+    本地 `SKILL.md` 路径、`gpt-5.4-mini` worker、`multi_agent_v1.spawn_agent`
+    参数、orientation、output_dir、timeout、expected outputs 和 fallback policy。
+  - `subagent_spawn_prompt.md` 是给 `gpt-5.4` 主 agent 的启动说明：把对应
+    render skill 作为 `items[type=skill]` 交给 `gpt-5.4-mini`，worker 只写
+    该资源 output_dir。
+  - 若 `video_report.pdf` / `evidence_card.md` 未在 timeout 内生成，主 agent
+    应把该视频写入 coverage gap 或 low-signal source，然后继续 synthesis。
+- 提供强报告和全轨迹协议。
+  - 用户原始要求和工程协议记录在
+    `docs/china_harness_strong_report_protocol_zh.md`。
+  - `task.md` 要求主 agent 生成 `thesis_review.md`、`full_trajectory.md`、
+    `Mispricing Verdict`、`Paper Trade View` 和
+    `Probability Floor Decomposition`。
+  - `scripts/china_harness_tool.py agent_review` 可保存实际阅读材料、材料摘要、
+    可展示推理札记、source 选择说明、拒绝或降权材料、信息缺口和下一步搜索决策。
+  - `src/beatodds/agents/workspace.py` 会把这些 review 汇总进
+    `full_trajectory.md`，最终报告可作为附录引用。
+  - `full_trajectory.md` 每个 Evidence Review 先写 `Source：...`，再写
+    `./...` run 内相对短路径；视频候选池只保留 `./source_visits/...`
+    入口，完整标题、互动指标、选择/拒绝状态和理由留在候选池原文，避免报告附录过长。
+  - `scripts/audit_china_harness_run.py` 会检查 `full_trajectory.md`、
+    `thesis_review.md`、强结论 section、证据路径数量和 agentic trajectory。
+  - 当前通过验收的 Taiwan strong-thesis run 在
+    `workspace/will_china_invade_taiwan_by/2026/gpt-5.4-strong-round2/`：
+    `p_m=0.068`，`p_f=0.008`，`mispricing_verdict=absolute_overestimate`，
+    `paper_trade_view.direction=buy_no`。
+- 提供 `scripts/render_forecast_report_pdf.py`，把 `forecast_report.md/json` 渲染成
+  `forecast_report.pdf`，并在 `artifacts/report_charts/` 下输出概率/置信度图表。
+  - 对多 outcome 市场，支持从 `metadata.company_probabilities`、
+    `metadata.outcome_probabilities` 或顶层 `outcomes` 读取 outcome 分布并画图。
+- `ChinaAgentLoopController`、`ScriptedChinaAgent` 和 `LLMChinaAgent` 保留为 legacy
+  validation/API-agent 路径，不再是默认主 harness。
+
+支撑文件：
+
+- `src/beatodds/agents/models.py`
+  - 定义 `AgentRunContext`、`TrajectoryStep`、`AgentToolResult`、`SourceCard`。
+  - 定义 `ForecastOutcomeProbability` 和 `MultiOutcomeForecast`，用于多 outcome
+    市场的机器可读概率分布。
+- `src/beatodds/agents/workspace.py`
+  - `ChinaForecastWorkspace` 创建和维护文件 workspace。
+- `src/beatodds/agents/source_cards.py`
+  - 将搜索结果渲染成 source card。
+- `src/beatodds/agents/source_quality.py`
+  - 对搜索结果做质量评分、上下文实体检查、boilerplate 检测和重排。
+- `src/beatodds/agents/tool_registry.py`
+  - `ChinaToolRegistry` 管理 access tools。
+  - `SearchTool` 包装 provider-neutral search。
+- `src/beatodds/agents/local_harness.py`
+  - 渲染 `task.md`、`tool_manifest.md/json` 和 `codex_prompt.md`。
+- `src/beatodds/agents/access_tools.py`
+  - 实现 source registry、query generation、Polymarket context、baseline 和 resource stubs。
+- `src/beatodds/agents/controller.py`
+  - legacy scripted/API agent loop controller。
+- `src/beatodds/agents/llm_agent.py`
+  - legacy DeepSeek/OpenAI-compatible API agent。
+- `scripts/run_china_harness.py`
+  - 从 Q + resolution bootstrap md-first local agent workspace。
+- `scripts/china_harness_tool.py`
+  - 在既有 workspace 中执行单个 repo tool 并自动落盘。
+- `scripts/render_forecast_report_pdf.py`
+  - 生成最终 PDF 报告和简单图表。
+
+默认 workspace：
+
+```text
+workspace/{event_slug}/{market_slug}/{agent_name}/
+```
+
+入口命令：
+
+```bash
+uv run scripts/run_china_harness.py \
+  --event-title "Will China invade Taiwan by 2026?" \
+  --market "Will China invade Taiwan by end of 2026?" \
+  --condition-id 0xtaiwan \
+  --p-m 0.0625
+
+# 默认 agent workspace 目录是 gpt-5.4-mini。
+# 如果需要重复实验，应显式传入 --agent-run-id。
+
+uv run scripts/china_harness_tool.py --workspace "<run_dir>" read_polymarket_context
+uv run scripts/china_harness_tool.py --workspace "<run_dir>" export_source_registry
+uv run scripts/china_harness_tool.py --workspace "<run_dir>" search_web \
+  --query "Taiwan invasion 2026 official assessment" \
+  --source-category foreign_crosscheck \
+  --max-results 5
+
+uv run scripts/render_forecast_report_pdf.py --workspace "<run_dir>"
+```
+
+当前限制：
+
+- 真实 DeepSeek + Tavily 的旧 API-agent 路径已跑通过 Taiwan invasion 和 Xi
+  leadership 两类 case，但该路径现降级为 legacy validation。
+- 新 local-agent 路径已经能生成 `task.md` / `tool_manifest.md`，并能通过
+  `china_harness_tool.py` 把 search action、source card、claim、trajectory 追加到
+  同一 workspace。
+- 最终展示报告现在要求生成 `forecast_report.pdf`；PDF renderer 会读取
+  `forecast_report.md/json` 并 include 概率/置信度图表。
+- agentic search 审计日志在 `docs/china_harness_audit_log.md`。
+- stop/budget policy 还很简单。
+- `model_baseline_forecast` 已能走独立 LLM baseline，但默认 local-agent run 不启用。
+- DB 只应记录 workspace path / report path，当前还未对接。
+- Video resource processor 当前生成 subagent-ready manifest/prompt；真实视频正文
+  PDF 由 `gpt-5.4-mini` worker 使用 `bilibili-render-pdf` 或
+  `youtube-render-pdf` skill 产出。
+- source quality filter 已能过滤一部分低质量结果，但官方和半官方 search 仍可能
+  混入旧材料；后续需要 domain-specific fetch 和更好的 recency/rerank。
+
+### 7. 用 LLM 预测公平概率
 
 能力：
 
@@ -203,9 +378,11 @@ uv run scripts/run_scanner.py --top 10 --complete-groups
 当前限制：
 
 - 还没有保存 prompt hash 或完整 prompt。
-- evidence 和 reasoning 已保存，但尚不能完整重构当时的 LLM 输入。
+- `workflow_records/` 会保存 market、snapshot、parser features、evidence 和
+  forecast reasoning 的文件副本，可重建核心 workflow 输入。
+- 完整 LLM prompt hash 和 provider response 原文仍未保存。
 
-### 7. 机会评分和排序
+### 8. 机会评分和排序
 
 能力：
 
@@ -228,7 +405,7 @@ uv run scripts/run_scanner.py --top 10 --complete-groups
 - 还没有 empirical calibration。
 - 还没有 `market_llm_ensemble`。
 
-### 8. 批量预测并持久化评测记录
+### 9. 批量预测并持久化评测记录
 
 能力：
 
@@ -237,6 +414,8 @@ uv run scripts/run_scanner.py --top 10 --complete-groups
 - 用 `--min-prob` 和 `--max-prob` 过滤市场概率区间。
 - 依次执行 parse、retrieve evidence、forecast、persist。
 - 同时写 compact eval records 和更完整的 workflow state。
+- 每次 `save_forecast_run()` 都会额外写一份本地 workflow replay artifact 到
+  `workflow_records/`。
 
 支撑文件：
 
@@ -248,18 +427,23 @@ uv run scripts/run_scanner.py --top 10 --complete-groups
   - 用于 Brier Skill Score 计算的 compact table。
 - `src/beatodds/evaluation/workflow_store.py`
   - stateful workflow DB。
+- `src/beatodds/evaluation/workflow_records.py`
+  - 将每次 forecast run 复制成 JSON 和 Markdown artifact。
+- `workflow_records/`
+  - 本地 workflow replay 文件夹，目录说明进仓库，运行记录默认被忽略。
 
 入口命令：
 
 ```bash
 uv run scripts/run_batch_eval.py --top 5 --exclude-sports --min-prob 0.05
+uv run scripts/run_batch_eval.py --top 5 --china-info --exclude-sports --min-prob 0.05
 uv run scripts/run_batch_eval.py --show-stored
 uv run scripts/run_batch_eval.py --show-workflow
 uv run scripts/run_batch_eval.py --show-market <condition_id>
 uv run scripts/run_batch_eval.py --show-due --stale-hours 24 --top 10
 ```
 
-### 9. 追踪 outcome 并计算评测指标
+### 10. 追踪 outcome 并计算评测指标
 
 能力：
 
@@ -288,7 +472,7 @@ uv run scripts/run_batch_eval.py --show-due --stale-hours 24 --top 10
 - 还没有自动 Polymarket/Gamma resolution parser。
 - 当前本地 DB 没有 resolved outcomes，因此 BSS 还没有意义。
 
-### 10. 选择需要重新预测的市场
+### 11. 选择需要重新预测的市场
 
 能力：
 
@@ -314,7 +498,7 @@ uv run scripts/run_batch_eval.py --show-due --stale-hours 24 --top 10
 - repeated forecasting 前需要先刷新 tracked market 的当前 order-book snapshot，
   否则新 forecast 会使用旧 `p_m`。
 
-### 11. Paper trading account 基建
+### 12. Paper trading account 基建
 
 能力：
 
@@ -525,6 +709,15 @@ workflow tables 是 long-running state layer：
 - 使用入口：`--show-workflow`、`--show-market`、`--show-due`。
 - 实现文件：`src/beatodds/evaluation/workflow_store.py`。
 
+workflow replay artifacts 是文件副本层：
+
+- 用途：把一次 forecast workflow 的 market、snapshot、parser output、queries、
+  evidence、forecast output 复制成可重建文件。
+- 默认目录：`workflow_records/`。
+- 输出格式：`*.json` 完整结构化记录，`*.md` 人工阅读摘要。
+- Git 策略：目录下运行记录被 `.gitignore` 忽略，只提交 README 和 ignore 规则。
+- 可用 `WORKFLOW_RECORDS_DIR=/path/to/dir` 覆盖保存位置。
+
 paper trading tables 是 account/ledger layer：
 
 - 用途：保存 paper trading 账户、风险参数和现金流水。
@@ -714,8 +907,13 @@ No tracked markets are due for a new forecast.
 
 - `condition_id`
 - `condition_type`
+- `event_type`
+- `china_relevance`
 - `key_entities_json`
 - `search_queries_json`
+- `geography_json`
+- `resolution_source_hint`
+- `source_routing_hints_json`
 - `has_explicit_deadline`
 - `deadline_date`
 - `oracle_type`
@@ -752,6 +950,14 @@ No tracked markets are due for a new forecast.
 - `published_at`
 - `retrieved_at`
 - `relevance_score`
+- `provider`
+- `source_type`
+- `direction`
+- `strength`
+- `resolution_relevance`
+- `reliability_prior`
+- `dedupe_key`
+- `raw_metadata_json`
 
 `outcomes`：
 
@@ -882,7 +1088,11 @@ Paper trading account store：
 语义/证据信号：
 
 - `src/beatodds/resolution_parser/parser.py`：LLM 解析 resolution text。
-- `src/beatodds/evidence/retriever.py`：Tavily evidence retrieval。
+- `src/beatodds/evidence/retriever.py`：provider-based evidence retrieval。
+- `src/beatodds/evidence/china_query.py`：中文 query expansion。
+- `src/beatodds/evidence/china_sources.py`：中国 source registry loader。
+- `src/beatodds/evidence/china_router.py`：中国 source router。
+- `src/beatodds/evidence/providers/`：Tavily 和 mock search provider。
 - `src/beatodds/evidence/forecaster.py`：LLM probability forecast。
 
 评分：

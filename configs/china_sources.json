@@ -1,0 +1,454 @@
+{
+  "sources": [
+    {
+      "name": "State Council",
+      "domain": "gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["policy", "social_incident", "military_security"],
+      "reliability_prior": 0.92,
+      "access_method": "site_search",
+      "notes": "Central policy announcements and State Council releases."
+    },
+    {
+      "name": "National Development and Reform Commission",
+      "domain": "ndrc.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["policy", "macro_data", "real_estate", "technology"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Industrial policy, pricing policy, and development plans."
+    },
+    {
+      "name": "Ministry of Finance",
+      "domain": "mof.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["policy", "macro_data", "financial_market"],
+      "reliability_prior": 0.88,
+      "access_method": "site_search",
+      "notes": "Fiscal policy, budget, and government bond notices."
+    },
+    {
+      "name": "National Bureau of Statistics",
+      "domain": "stats.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["macro_data", "real_estate"],
+      "reliability_prior": 0.95,
+      "access_method": "site_search",
+      "notes": "Official GDP, CPI, PMI, industrial output, and property data."
+    },
+    {
+      "name": "General Administration of Customs",
+      "domain": "customs.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["macro_data", "diplomacy_trade"],
+      "reliability_prior": 0.92,
+      "access_method": "site_search",
+      "notes": "Trade data, customs notices, and import/export controls."
+    },
+    {
+      "name": "People's Bank of China",
+      "domain": "pbc.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["macro_data", "financial_market", "policy"],
+      "reliability_prior": 0.94,
+      "access_method": "site_search",
+      "notes": "Monetary policy, credit data, rates, and market operations."
+    },
+    {
+      "name": "Ministry of Commerce",
+      "domain": "mofcom.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["diplomacy_trade", "policy"],
+      "reliability_prior": 0.92,
+      "access_method": "site_search",
+      "notes": "Trade policy, export controls, sanctions, and commerce notices."
+    },
+    {
+      "name": "Ministry of Foreign Affairs",
+      "domain": "mfa.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["diplomacy_trade", "military_security"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Diplomatic statements and spokesperson remarks."
+    },
+    {
+      "name": "Ministry of National Defense",
+      "domain": "mnd.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["military_security"],
+      "reliability_prior": 0.88,
+      "access_method": "site_search",
+      "notes": "Defense ministry releases and military exercise statements."
+    },
+    {
+      "name": "China Securities Regulatory Commission",
+      "domain": "csrc.gov.cn",
+      "source_type": "regulator",
+      "jurisdiction": "national",
+      "topics": ["regulation", "financial_market", "company"],
+      "reliability_prior": 0.92,
+      "access_method": "site_search",
+      "notes": "Capital market regulation, enforcement, and listed-company policy."
+    },
+    {
+      "name": "State Administration for Market Regulation",
+      "domain": "samr.gov.cn",
+      "source_type": "regulator",
+      "jurisdiction": "national",
+      "topics": ["regulation", "company", "technology"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Antitrust, product quality, and market regulation."
+    },
+    {
+      "name": "Cyberspace Administration of China",
+      "domain": "cac.gov.cn",
+      "source_type": "regulator",
+      "jurisdiction": "national",
+      "topics": ["regulation", "technology"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Internet, data, and cybersecurity regulation."
+    },
+    {
+      "name": "Ministry of Industry and Information Technology",
+      "domain": "miit.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["technology", "policy", "company"],
+      "reliability_prior": 0.88,
+      "access_method": "site_search",
+      "notes": "Industrial policy, telecom, semiconductor, and NEV information."
+    },
+    {
+      "name": "Ministry of Science and Technology",
+      "domain": "most.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["technology", "policy"],
+      "reliability_prior": 0.86,
+      "access_method": "site_search",
+      "notes": "Science policy, research plans, and technology programs."
+    },
+    {
+      "name": "National Health Commission",
+      "domain": "nhc.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["public_health"],
+      "reliability_prior": 0.93,
+      "access_method": "site_search",
+      "notes": "Public health notices and disease control policy."
+    },
+    {
+      "name": "China CDC",
+      "domain": "chinacdc.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["public_health"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Disease surveillance and technical public health releases."
+    },
+    {
+      "name": "National Medical Products Administration",
+      "domain": "nmpa.gov.cn",
+      "source_type": "regulator",
+      "jurisdiction": "national",
+      "topics": ["public_health", "regulation", "company"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Drug, device, and vaccine approvals or enforcement actions."
+    },
+    {
+      "name": "Ministry of Housing and Urban-Rural Development",
+      "domain": "mohurd.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["real_estate", "policy"],
+      "reliability_prior": 0.88,
+      "access_method": "site_search",
+      "notes": "Housing and urban construction policy."
+    },
+    {
+      "name": "Ministry of Natural Resources",
+      "domain": "mnr.gov.cn",
+      "source_type": "land_construction",
+      "jurisdiction": "national",
+      "topics": ["real_estate", "policy"],
+      "reliability_prior": 0.86,
+      "access_method": "site_search",
+      "notes": "Land supply, natural resources, and construction-related releases."
+    },
+    {
+      "name": "State Administration of Foreign Exchange",
+      "domain": "safe.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["financial_market", "macro_data"],
+      "reliability_prior": 0.88,
+      "access_method": "site_search",
+      "notes": "FX reserves, balance of payments, and foreign exchange policy."
+    },
+    {
+      "name": "Shanghai Stock Exchange",
+      "domain": "sse.com.cn",
+      "source_type": "exchange_filing",
+      "jurisdiction": "exchange",
+      "topics": ["company", "financial_market", "regulation"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Listed company announcements and exchange notices."
+    },
+    {
+      "name": "Shenzhen Stock Exchange",
+      "domain": "szse.cn",
+      "source_type": "exchange_filing",
+      "jurisdiction": "exchange",
+      "topics": ["company", "financial_market", "regulation"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Listed company announcements and exchange notices."
+    },
+    {
+      "name": "Beijing Stock Exchange",
+      "domain": "bse.cn",
+      "source_type": "exchange_filing",
+      "jurisdiction": "exchange",
+      "topics": ["company", "financial_market", "regulation"],
+      "reliability_prior": 0.86,
+      "access_method": "site_search",
+      "notes": "Listed company announcements and exchange notices."
+    },
+    {
+      "name": "CNINFO",
+      "domain": "cninfo.com.cn",
+      "source_type": "company_filing",
+      "jurisdiction": "exchange",
+      "topics": ["company", "financial_market"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Main disclosure platform for A-share company filings."
+    },
+    {
+      "name": "HKEXnews",
+      "domain": "hkexnews.hk",
+      "source_type": "company_filing",
+      "jurisdiction": "exchange",
+      "topics": ["company", "financial_market"],
+      "reliability_prior": 0.9,
+      "access_method": "site_search",
+      "notes": "Hong Kong listed-company announcements."
+    },
+    {
+      "name": "Xinhua",
+      "domain": "xinhuanet.com",
+      "source_type": "official_media",
+      "jurisdiction": "national",
+      "topics": ["policy", "diplomacy_trade", "military_security", "social_incident"],
+      "reliability_prior": 0.75,
+      "access_method": "site_search",
+      "notes": "Official media cross-check, not a resolution source by itself."
+    },
+    {
+      "name": "People's Daily",
+      "domain": "people.com.cn",
+      "source_type": "official_media",
+      "jurisdiction": "national",
+      "topics": ["policy", "social_incident", "military_security"],
+      "reliability_prior": 0.72,
+      "access_method": "site_search",
+      "notes": "Official media cross-check, not a resolution source by itself."
+    },
+    {
+      "name": "Caixin",
+      "domain": "caixin.com",
+      "source_type": "professional_media",
+      "jurisdiction": "national",
+      "topics": ["macro_data", "macro_policy", "financial_market", "company", "regulation"],
+      "reliability_prior": 0.78,
+      "access_method": "site_search",
+      "notes": "Professional Chinese reporting and policy/market interpretation; watch paywall snippets."
+    },
+    {
+      "name": "Yicai",
+      "domain": "yicai.com",
+      "source_type": "professional_media",
+      "jurisdiction": "national",
+      "topics": ["macro_policy", "financial_market", "company", "industrial_policy"],
+      "reliability_prior": 0.72,
+      "access_method": "site_search",
+      "notes": "Chinese financial and policy reporting."
+    },
+    {
+      "name": "Cailian Press",
+      "domain": "cls.cn",
+      "source_type": "professional_media",
+      "jurisdiction": "national",
+      "topics": ["financial_market", "company", "industrial_policy", "commodity_energy"],
+      "reliability_prior": 0.68,
+      "access_method": "site_search",
+      "notes": "Fast Chinese market news and policy-sensitive event flow."
+    },
+    {
+      "name": "Securities Times",
+      "domain": "stcn.com",
+      "source_type": "professional_media",
+      "jurisdiction": "national",
+      "topics": ["financial_market", "company", "regulation", "industrial_policy"],
+      "reliability_prior": 0.7,
+      "access_method": "site_search",
+      "notes": "Chinese securities and listed-company policy coverage."
+    },
+    {
+      "name": "Wallstreetcn",
+      "domain": "wallstreetcn.com",
+      "source_type": "professional_media",
+      "jurisdiction": "national",
+      "topics": ["macro_policy", "financial_market", "commodity_energy", "technology"],
+      "reliability_prior": 0.62,
+      "access_method": "site_search",
+      "notes": "Fast market interpretation; use as signal discovery and cross-check."
+    },
+    {
+      "name": "The Paper",
+      "domain": "thepaper.cn",
+      "source_type": "professional_media",
+      "jurisdiction": "national",
+      "topics": ["policy", "social_incident", "real_estate", "public_health"],
+      "reliability_prior": 0.66,
+      "access_method": "site_search",
+      "notes": "Chinese reporting on policy, local government, and social events."
+    },
+    {
+      "name": "21st Century Business Herald",
+      "domain": "21jingji.com",
+      "source_type": "professional_media",
+      "jurisdiction": "national",
+      "topics": ["macro_policy", "financial_market", "company", "real_estate"],
+      "reliability_prior": 0.68,
+      "access_method": "site_search",
+      "notes": "Chinese business reporting and policy interpretation."
+    },
+    {
+      "name": "China Money",
+      "domain": "chinamoney.com.cn",
+      "source_type": "market_professional",
+      "jurisdiction": "national",
+      "topics": ["financial_market", "macro_policy"],
+      "reliability_prior": 0.84,
+      "access_method": "site_search",
+      "notes": "Interbank market data, notices, and fixed-income market signals."
+    },
+    {
+      "name": "ChinaBond",
+      "domain": "chinabond.com.cn",
+      "source_type": "market_professional",
+      "jurisdiction": "national",
+      "topics": ["financial_market", "macro_policy"],
+      "reliability_prior": 0.82,
+      "access_method": "site_search",
+      "notes": "Bond market data, notices, and market infrastructure signals."
+    },
+    {
+      "name": "Securities Association of China",
+      "domain": "sac.net.cn",
+      "source_type": "market_professional",
+      "jurisdiction": "national",
+      "topics": ["financial_market", "regulation", "company"],
+      "reliability_prior": 0.78,
+      "access_method": "site_search",
+      "notes": "Industry association notices and securities market professional signals."
+    },
+    {
+      "name": "Asset Management Association of China",
+      "domain": "amac.org.cn",
+      "source_type": "market_professional",
+      "jurisdiction": "national",
+      "topics": ["financial_market", "regulation"],
+      "reliability_prior": 0.78,
+      "access_method": "site_search",
+      "notes": "Fund and asset-management industry notices."
+    },
+    {
+      "name": "Xueqiu",
+      "domain": "xueqiu.com",
+      "source_type": "expert_social",
+      "jurisdiction": "platform",
+      "topics": ["financial_market", "company", "industrial_policy"],
+      "reliability_prior": 0.45,
+      "access_method": "manual_url_or_search",
+      "notes": "Investor and expert discussion; account-specific reliability required."
+    },
+    {
+      "name": "Zhihu",
+      "domain": "zhihu.com",
+      "source_type": "expert_social",
+      "jurisdiction": "platform",
+      "topics": ["macro_policy", "technology", "social_incident", "public_health"],
+      "reliability_prior": 0.4,
+      "access_method": "manual_url_or_search",
+      "notes": "Expert explainers and discussion; use only with source quality review."
+    },
+    {
+      "name": "Weibo",
+      "domain": "weibo.com",
+      "source_type": "expert_social",
+      "jurisdiction": "platform",
+      "topics": ["social_incident", "elite_politics", "public_health", "financial_market"],
+      "reliability_prior": 0.32,
+      "access_method": "manual_url_or_search",
+      "notes": "Fast weak signals and rumor tracking; must be corroborated."
+    },
+    {
+      "name": "WeChat Public Accounts",
+      "domain": "mp.weixin.qq.com",
+      "source_type": "expert_social",
+      "jurisdiction": "platform",
+      "topics": ["macro_policy", "financial_market", "technology", "industrial_policy"],
+      "reliability_prior": 0.45,
+      "access_method": "manual_url_or_search",
+      "notes": "High-value Chinese expert essays are common; access is URL/search dependent."
+    },
+    {
+      "name": "Bilibili",
+      "domain": "bilibili.com",
+      "source_type": "expert_social",
+      "jurisdiction": "platform",
+      "topics": ["technology", "financial_market", "macro_policy", "social_incident"],
+      "reliability_prior": 0.38,
+      "access_method": "resource_processor",
+      "notes": "Video analysis source; process via bilibili-render-pdf skill."
+    },
+    {
+      "name": "China Court",
+      "domain": "chinacourt.gov.cn",
+      "source_type": "central_official",
+      "jurisdiction": "national",
+      "topics": ["regulation", "social_incident", "company"],
+      "reliability_prior": 0.84,
+      "access_method": "site_search",
+      "notes": "Court notices and legal proceeding signals."
+    },
+    {
+      "name": "China Government Procurement",
+      "domain": "ccgp.gov.cn",
+      "source_type": "procurement",
+      "jurisdiction": "national",
+      "topics": ["policy", "company", "technology"],
+      "reliability_prior": 0.82,
+      "access_method": "site_search",
+      "notes": "Government procurement notices and award announcements."
+    }
+  ]
+}

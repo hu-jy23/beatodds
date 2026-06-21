@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
@@ -23,6 +24,7 @@ from beatodds.common.types import (
     PriceSnapshot,
     ResolutionFeatures,
 )
+from beatodds.evaluation.workflow_records import save_workflow_record_copy
 
 
 def _db_path() -> Path:
@@ -36,6 +38,10 @@ def _json_list(values: list[str]) -> str:
     return json.dumps(values)
 
 
+def _json_dict(values: dict[str, Any]) -> str:
+    return json.dumps(values)
+
+
 def _load_json_list(value: str | None) -> list[str]:
     if not value:
         return []
@@ -44,6 +50,16 @@ def _load_json_list(value: str | None) -> list[str]:
     except json.JSONDecodeError:
         return []
     return loaded if isinstance(loaded, list) else []
+
+
+def _load_json_dict(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        loaded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _now() -> datetime:
@@ -121,8 +137,13 @@ def ensure_schema(conn) -> None:
         CREATE TABLE IF NOT EXISTS resolution_features (
             condition_id          TEXT PRIMARY KEY,
             condition_type        TEXT,
+            event_type            TEXT,
+            china_relevance       TEXT,
             key_entities_json     TEXT,
             search_queries_json   TEXT,
+            geography_json        TEXT,
+            resolution_source_hint TEXT,
+            source_routing_hints_json TEXT,
             has_explicit_deadline BOOLEAN,
             deadline_date         TIMESTAMP,
             oracle_type           TEXT,
@@ -160,7 +181,15 @@ def ensure_schema(conn) -> None:
             source           TEXT,
             published_at     TIMESTAMP,
             retrieved_at     TIMESTAMP,
-            relevance_score  DOUBLE
+            relevance_score  DOUBLE,
+            provider         TEXT,
+            source_type      TEXT,
+            direction        TEXT,
+            strength         DOUBLE,
+            resolution_relevance DOUBLE,
+            reliability_prior DOUBLE,
+            dedupe_key       TEXT,
+            raw_metadata_json TEXT
         )
     """)
     conn.execute("""
@@ -172,7 +201,37 @@ def ensure_schema(conn) -> None:
             notes              TEXT
         )
     """)
+    _ensure_columns(conn, "resolution_features", {
+        "event_type": "TEXT",
+        "china_relevance": "TEXT",
+        "geography_json": "TEXT",
+        "resolution_source_hint": "TEXT",
+        "source_routing_hints_json": "TEXT",
+    })
+    _ensure_columns(conn, "forecast_runs", {
+        "forecast_direction": "TEXT",
+    })
+    _ensure_columns(conn, "workflow_evidence_items", {
+        "provider": "TEXT",
+        "source_type": "TEXT",
+        "direction": "TEXT",
+        "strength": "DOUBLE",
+        "resolution_relevance": "DOUBLE",
+        "reliability_prior": "DOUBLE",
+        "dedupe_key": "TEXT",
+        "raw_metadata_json": "TEXT",
+    })
     conn.commit()
+
+
+def _ensure_columns(conn, table_name: str, columns: dict[str, str]) -> None:
+    existing = {
+        row[1]
+        for row in conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+    }
+    for name, type_sql in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {type_sql}")
 
 
 def upsert_tracked_market(market: MarketMeta, seen_at: datetime | None = None) -> None:
@@ -273,16 +332,23 @@ def save_resolution_features(features: ResolutionFeatures) -> None:
     conn = _connect()
     conn.execute("""
         INSERT OR REPLACE INTO resolution_features (
-            condition_id, condition_type, key_entities_json, search_queries_json,
+            condition_id, condition_type, event_type, china_relevance,
+            key_entities_json, search_queries_json, geography_json,
+            resolution_source_hint, source_routing_hints_json,
             has_explicit_deadline, deadline_date, oracle_type,
             exception_clauses_json, ambiguity_score, risk_flags_json, parsed_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [
         features.condition_id,
         features.condition_type,
+        features.event_type,
+        features.china_relevance,
         _json_list(features.key_entities),
         _json_list(features.search_queries),
+        _json_list(features.geography),
+        features.resolution_source_hint,
+        _json_list(features.source_routing_hints),
         features.has_explicit_deadline,
         _db_time(features.deadline_date),
         features.oracle_type,
@@ -310,14 +376,15 @@ def save_forecast_run(
     run_id = str(uuid4())
     p_m = candidate.snapshot.midpoint
     p_f = forecast.p_f
+    created_at = created_at or _now()
     conn = _connect()
     conn.execute("""
         INSERT INTO forecast_runs (
             run_id, condition_id, snapshot_time, evidence_frozen_at,
-            p_m, p_f, edge, confidence, signal_type, model_version,
+            p_m, p_f, edge, confidence, forecast_direction, signal_type, model_version,
             reasoning, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [
         run_id,
         candidate.market.condition_id,
@@ -327,10 +394,11 @@ def save_forecast_run(
         p_f,
         p_f - p_m,
         forecast.confidence,
+        forecast.forecast_direction,
         signal_type,
         forecast.model,
         forecast.reasoning,
-        _db_time(created_at or _now()),
+        _db_time(created_at),
     ])
 
     fallback_query = (
@@ -342,9 +410,11 @@ def save_forecast_run(
         conn.execute("""
             INSERT INTO workflow_evidence_items (
                 evidence_id, run_id, condition_id, query, title, summary, url,
-                source, published_at, retrieved_at, relevance_score
+                source, published_at, retrieved_at, relevance_score, provider,
+                source_type, direction, strength, resolution_relevance,
+                reliability_prior, dedupe_key, raw_metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             str(uuid4()),
             run_id,
@@ -355,10 +425,31 @@ def save_forecast_run(
             item.url,
             item.source,
             _db_time(item.published_at),
-            _db_time(retrieved_at),
+            _db_time(item.retrieved_at or retrieved_at),
             item.relevance_score,
+            item.provider,
+            item.source_type,
+            item.direction,
+            item.strength,
+            item.resolution_relevance,
+            item.reliability_prior,
+            item.dedupe_key,
+            _json_dict(item.raw_metadata),
         ])
     conn.close()
+    try:
+        save_workflow_record_copy(
+            run_id=run_id,
+            candidate=candidate,
+            features=features,
+            evidence=evidence,
+            forecast=forecast,
+            evidence_frozen_at=evidence_frozen_at,
+            signal_type=signal_type,
+            created_at=created_at,
+        )
+    except Exception as exc:
+        logger.warning(f"WorkflowStore: workflow record copy failed for {run_id}: {exc}")
     logger.info(
         f"WorkflowStore: saved forecast run {run_id} for "
         f"{candidate.market.condition_id[:20]}"
@@ -471,7 +562,8 @@ def load_forecast_runs(condition_id: str | None = None, limit: int = 50) -> list
     if condition_id:
         rows = conn.execute("""
             SELECT run_id, condition_id, snapshot_time, evidence_frozen_at,
-                   p_m, p_f, edge, confidence, signal_type, model_version,
+                   p_m, p_f, edge, confidence, forecast_direction,
+                   signal_type, model_version,
                    reasoning, created_at
             FROM forecast_runs
             WHERE condition_id = ?
@@ -481,7 +573,8 @@ def load_forecast_runs(condition_id: str | None = None, limit: int = 50) -> list
     else:
         rows = conn.execute("""
             SELECT run_id, condition_id, snapshot_time, evidence_frozen_at,
-                   p_m, p_f, edge, confidence, signal_type, model_version,
+                   p_m, p_f, edge, confidence, forecast_direction,
+                   signal_type, model_version,
                    reasoning, created_at
             FROM forecast_runs
             ORDER BY created_at DESC
@@ -498,10 +591,11 @@ def load_forecast_runs(condition_id: str | None = None, limit: int = 50) -> list
             "p_f": row[5],
             "edge": row[6],
             "confidence": row[7],
-            "signal_type": row[8],
-            "model_version": row[9],
-            "reasoning": row[10],
-            "created_at": row[11],
+            "forecast_direction": row[8] or "observe",
+            "signal_type": row[9],
+            "model_version": row[10],
+            "reasoning": row[11],
+            "created_at": row[12],
         }
         for row in rows
     ]
@@ -583,10 +677,12 @@ def load_due_markets(
 def load_evidence_for_run(run_id: str) -> list[EvidenceItem]:
     conn = _connect()
     rows = conn.execute("""
-        SELECT query, title, summary, url, source, published_at, relevance_score
+        SELECT query, title, summary, url, source, published_at, relevance_score,
+               retrieved_at, provider, source_type, direction, strength,
+               resolution_relevance, reliability_prior, dedupe_key, raw_metadata_json
         FROM workflow_evidence_items
         WHERE run_id = ?
-        ORDER BY relevance_score DESC
+        ORDER BY relevance_score DESC NULLS LAST
     """, [run_id]).fetchall()
     conn.close()
     return [
@@ -598,6 +694,15 @@ def load_evidence_for_run(run_id: str) -> list[EvidenceItem]:
             source=row[4],
             published_at=row[5],
             relevance_score=row[6],
+            retrieved_at=row[7],
+            provider=row[8] or "tavily",
+            source_type=row[9] or "western_source",
+            direction=row[10] or "neutral",
+            strength=row[11] or 0.0,
+            resolution_relevance=row[12] or 0.0,
+            reliability_prior=row[13] or 0.0,
+            dedupe_key=row[14] or "",
+            raw_metadata=_load_json_dict(row[15]),
         )
         for row in rows
     ]
@@ -626,7 +731,9 @@ def load_resolution_features(condition_id: str) -> ResolutionFeatures | None:
     row = conn.execute("""
         SELECT condition_id, condition_type, key_entities_json, search_queries_json,
                has_explicit_deadline, deadline_date, oracle_type,
-               exception_clauses_json, ambiguity_score, risk_flags_json, parsed_at
+               exception_clauses_json, ambiguity_score, risk_flags_json, parsed_at,
+               event_type, china_relevance, geography_json, resolution_source_hint,
+               source_routing_hints_json
         FROM resolution_features
         WHERE condition_id = ?
     """, [condition_id]).fetchone()
@@ -645,4 +752,9 @@ def load_resolution_features(condition_id: str) -> ResolutionFeatures | None:
         ambiguity_score=row[8],
         risk_flags=_load_json_list(row[9]),
         parsed_at=row[10],
+        event_type=row[11] or "other",
+        china_relevance=row[12] or "low",
+        geography=_load_json_list(row[13]),
+        resolution_source_hint=row[14] or "",
+        source_routing_hints=_load_json_list(row[15]),
     )

@@ -1,0 +1,16 @@
+\section{Problem Setting}
+
+An event is a semantic container. A binary market $m$ is a tradable YES/NO claim with a condition identifier, token identifiers, a deadline, and a natural-language resolution rule. At forecast time $t$, the CLOB best bid and ask define a side-specific executable price. We denote the YES-market probability by $p_m(t)$ and the system fair probability by $p_f(t)$. The raw directional signal is
+\[
+  \Delta(t) = p_f(t)-p_m(t).
+\]
+Positive $\Delta$ supports YES. Negative $\Delta$ supports NO after converting the fair probability and executable quote to the selected side.
+
+A forecast run is $r=(m,t,p_m,p_f,E_t,\tau)$, where $E_t$ is the retained evidence set and $\tau$ is the action trajectory that produced it. The target is the later binary resolution $y_m\in\{0,1\}$. Before a search call, the system writes an \texttt{evidence\_frozen\_at} timestamp and rejects evidence published after this cutoff. Thus an evaluation record can distinguish a genuinely prospective forecast from a post-hoc explanation.
+
+Trading uses an executable edge. For a chosen side $s$, with best ask $a_s$, fee rate $f$, and expected slippage $\ell$, BeatOdds uses
+\[
+  e^{\mathrm{net}}_s = p_{f,s} - a_s - f - \ell,
+  \qquad \mathrm{score}_s=|e^{\mathrm{net}}_s|\,c,
+\]
+where $c\in[0,1]$ is forecast confidence. This prevents ranking a large untradeable midpoint discrepancy above a smaller executable opportunity. Resolution ambiguity, spread, low liquidity, and missing evidence are retained as explicit risk signals.

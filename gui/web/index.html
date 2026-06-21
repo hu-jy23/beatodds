@@ -14,8 +14,12 @@
         <h2 id="selectedTitle">Loading markets</h2>
       </div>
       <div class="top-actions">
+        <button class="btn" id="updateCurrentBtn">Update + forecast topic</button>
+        <button class="btn" id="updateTrackedBtn">Update + forecast tracked</button>
+        <button class="btn" id="updateAllBtn">Update + forecast all</button>
         <button class="btn secondary" id="marketsPageBtn">Markets</button>
         <button class="btn secondary" id="userPageBtn">User</button>
+        <button class="btn secondary" id="languageToggle">中文</button>
         <button class="btn secondary" id="themeToggle">Dark</button>
         <button class="btn secondary" id="refreshBtn">Refresh</button>
         <button class="icon-btn ghost hidden-toggle" id="showRight" title="Show console">&lt;</button>
@@ -31,7 +35,16 @@
           <button class="icon-btn" id="hideLeft" title="Hide event list">&lt;</button>
         </div>
         <div class="search-row">
-          <input id="marketSearch" type="search" placeholder="Search events" />
+          <div class="search-add-row">
+            <input id="marketSearch" type="search" placeholder="Search or add topic" />
+            <button class="btn primary" id="addTopicBtn" title="Search Polymarket online and add topic">Add</button>
+          </div>
+          <div class="topic-add-status" id="topicAddStatus"></div>
+          <div class="fresh-topic-row">
+            <input id="newTopicCap" type="number" min="1" max="500" step="1" value="100" title="Fresh topic cap" />
+            <button class="btn secondary" id="getNewTopicsBtn" title="Fetch fresh online topics without forecasting">Get new topics</button>
+          </div>
+          <div class="topic-add-status" id="topicFetchStatus"></div>
         </div>
         <div class="segmented" role="tablist">
           <button class="segment active" data-filter="all">All</button>
@@ -41,8 +54,8 @@
         <div class="market-list" id="marketList"></div>
       </aside>
 
-      <main class="main-col">
-        <section class="analysis-panel">
+      <main class="main-col panel-zone" data-zone="middle">
+        <section class="analysis-panel draggable-panel" data-panel-id="analysis">
           <div class="event-hero">
             <div class="event-icon" id="eventIcon">BO</div>
             <div class="event-hero-main">
@@ -59,7 +72,7 @@
           </div>
         </section>
 
-        <section class="detail-block topic-detail-block">
+        <section class="detail-block topic-detail-block draggable-panel" data-panel-id="event-markets">
           <div class="panel-head tight">
             <h3>Markets in Event</h3>
             <span id="eventMarketCount">--</span>
@@ -67,7 +80,7 @@
           <div class="event-market-list" id="eventMarketList"></div>
         </section>
 
-        <section class="detail-block event-text-block">
+        <section class="detail-block event-text-block draggable-panel" data-panel-id="event-info">
           <div class="panel-head tight">
             <div class="tab-row" role="tablist" aria-label="Event information">
               <button class="tab-btn active" id="eventRulesTab" data-info-tab="rules" role="tab">规则</button>
@@ -78,18 +91,7 @@
           <p id="eventInfoContent">--</p>
         </section>
 
-        <section class="detail-block topic-detail-block">
-          <div class="panel-head tight">
-            <h3>Statistics</h3>
-            <span>current dataset context</span>
-          </div>
-          <div class="topic-chart-grid">
-            <canvas id="statsChart" width="360" height="180"></canvas>
-            <canvas id="edgeChart" width="360" height="180"></canvas>
-          </div>
-        </section>
-
-        <section class="topic-panel">
+        <section class="topic-panel draggable-panel" data-panel-id="topic-brief">
           <div class="panel-head tight">
             <h3>Event Brief</h3>
             <span id="topicStatus">selected event</span>
@@ -98,7 +100,7 @@
           <div class="message-list compact" id="topicMessages"></div>
         </section>
 
-        <section class="dialog-panel">
+        <section class="dialog-panel draggable-panel" data-panel-id="dialog">
           <div class="panel-head">
             <div>
               <p class="eyebrow">Dialog</p>
@@ -116,9 +118,16 @@
           <div class="timeline" id="timeline"></div>
         </section>
 
+        <section class="detail-block topic-detail-block draggable-panel" data-panel-id="related-news">
+          <div class="panel-head tight">
+            <h3>Related News</h3>
+            <span id="newsStatus">manual update fills this list</span>
+          </div>
+          <div class="evidence-list" id="newsList"></div>
+        </section>
       </main>
 
-      <aside class="rail right-rail" id="rightRail">
+      <aside class="rail right-rail panel-zone" id="rightRail" data-zone="right">
         <div class="rail-head">
           <div>
             <p class="eyebrow">Market</p>
@@ -126,8 +135,8 @@
           </div>
           <button class="icon-btn" id="hideRight" title="Hide console">&gt;</button>
         </div>
-        <section class="metric-strip" id="metricStrip"></section>
-        <section class="detail-block console-intro">
+        <section class="metric-strip draggable-panel" id="metricStrip" data-panel-id="metrics"></section>
+        <section class="detail-block console-intro draggable-panel" data-panel-id="operator-summary">
           <div class="panel-head tight">
             <h3 id="selectedMarketTitle">Selected Market</h3>
             <span id="selectedMarketMeta">--</span>
@@ -162,14 +171,30 @@
           </div>
           <div class="mini-stats" id="consoleSummary"></div>
         </section>
-        <section class="detail-block report-block">
+        <section class="detail-block topic-detail-block draggable-panel" data-panel-id="statistics">
+          <div class="panel-head tight">
+            <h3>Statistics</h3>
+            <span>current dataset context</span>
+          </div>
+          <div class="topic-chart-grid">
+            <div class="chart-card">
+              <canvas id="statsChart" width="360" height="180"></canvas>
+              <p class="chart-note">Category mix across the currently loaded market list.</p>
+            </div>
+            <div class="chart-card">
+              <canvas id="edgeChart" width="360" height="180"></canvas>
+              <p class="chart-note">Stored forecast edges; green favors YES, red favors NO.</p>
+            </div>
+          </div>
+        </section>
+        <section class="detail-block report-block draggable-panel" data-panel-id="special-report">
           <div class="panel-head tight">
             <h3>Special Report</h3>
             <span>priority alerts</span>
           </div>
           <div class="special-list" id="specialReport"></div>
         </section>
-        <section class="detail-block console-panel">
+        <section class="detail-block console-panel draggable-panel" data-panel-id="tracking-console">
           <div class="panel-head tight">
             <h3>Tracking Console</h3>
             <span id="trackingStatus">--</span>
@@ -177,14 +202,14 @@
           <div class="mini-stats" id="trackingStats"></div>
           <canvas id="trackedChart" width="420" height="150"></canvas>
         </section>
-        <section class="detail-block console-panel">
+        <section class="detail-block console-panel draggable-panel" data-panel-id="action-report">
           <div class="panel-head tight">
             <h3>Action Report</h3>
             <span id="actionStatus">--</span>
           </div>
           <div class="report-list" id="actionReport"></div>
         </section>
-        <section class="detail-block message-panel">
+        <section class="detail-block message-panel draggable-panel" data-panel-id="generated-messages">
           <div class="panel-head tight">
             <h3>Generated Messages</h3>
             <span>follow-up drafts</span>
@@ -192,6 +217,45 @@
           <div class="message-list" id="messageList"></div>
         </section>
       </aside>
+    </div>
+    <div class="modal-backdrop" id="updateAllDialog" aria-hidden="true">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="updateAllTitle">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Manual Batch Update</p>
+            <h3 id="updateAllTitle">Update all topics?</h3>
+          </div>
+          <button class="icon-btn ghost" id="closeUpdateDialog" title="Close dialog">x</button>
+        </div>
+        <p class="modal-copy">
+          This can take minutes and may consume a lot of LLM and search tokens.
+          Choose a bounded run unless you intentionally want to refresh every listed topic.
+        </p>
+        <div class="choice-group">
+          <label class="choice-card">
+            <input type="radio" name="updateScope" value="limited" checked />
+            <span>
+              <strong>Limited topics</strong>
+              <small>Refresh the first N prioritized topics.</small>
+            </span>
+          </label>
+          <label class="choice-card">
+            <input type="radio" name="updateScope" value="all" />
+            <span>
+              <strong>All topics in list</strong>
+              <small>Refresh every loaded topic in the left rail.</small>
+            </span>
+          </label>
+        </div>
+        <label class="count-field" for="updateTopicCount">
+          Topic count
+          <input id="updateTopicCount" type="number" min="1" max="120" value="8" />
+        </label>
+        <div class="modal-actions">
+          <button class="btn subtle" id="cancelUpdateAll">Cancel</button>
+          <button class="btn primary" id="confirmUpdateAll">Start update</button>
+        </div>
+      </div>
     </div>
 
     <section class="user-page hidden" id="userPage">
@@ -206,9 +270,9 @@
         </div>
         <nav class="user-nav" aria-label="User sections">
           <button class="user-nav-btn active" data-user-section="overview">Overview</button>
-          <button class="user-nav-btn" data-user-section="profile">基础设置</button>
-          <button class="user-nav-btn" data-user-section="funds">资金管理</button>
-          <button class="user-nav-btn" data-user-section="positions">持仓与交易</button>
+          <button class="user-nav-btn" data-user-section="profile">Settings</button>
+          <button class="user-nav-btn" data-user-section="funds">Funds</button>
+          <button class="user-nav-btn" data-user-section="positions">Current shares</button>
           <button class="user-nav-btn" data-user-section="agent">Agent Pattern</button>
         </nav>
         <div class="account-switcher">
@@ -250,12 +314,26 @@
               <div class="transaction-list" id="transactionList"></div>
             </section>
           </div>
+          <section class="detail-block user-block">
+            <div class="panel-head tight">
+              <h3>Eval Earning Curves</h3>
+              <span>top-5 paper eval reports</span>
+            </div>
+            <div class="eval-curve-grid" id="evalCurveGrid"></div>
+          </section>
+          <section class="detail-block user-block">
+            <div class="panel-head tight">
+              <h3>Maintainer Console</h3>
+              <span id="overviewMaintainerConsoleStatus">sell / purchase / maintain</span>
+            </div>
+            <div class="maintainer-console" id="overviewMaintainerConsole"></div>
+          </section>
         </section>
 
         <section class="user-section hidden" id="userProfileSection">
           <div class="detail-block user-block">
             <div class="panel-head tight">
-              <h3>基础设置</h3>
+              <h3>Settings</h3>
               <span>name / icon / notes</span>
             </div>
             <div class="form-grid">
@@ -280,7 +358,7 @@
           <div class="user-grid two">
             <section class="detail-block user-block">
               <div class="panel-head tight">
-                <h3>资金管理</h3>
+                <h3>Funds</h3>
                 <span>local paper ledger</span>
               </div>
               <div class="form-grid compact">
@@ -309,22 +387,70 @@
         </section>
 
         <section class="user-section hidden" id="userPositionsSection">
+          <div class="user-section-toolbar">
+            <div>
+              <p class="eyebrow">Account Ledger</p>
+              <h2>Current shares</h2>
+            </div>
+            <button class="btn secondary" id="refreshPositionsBtn">Refresh positions</button>
+          </div>
+          <div class="account-money-strip" id="accountMoneyStrip"></div>
           <div class="user-grid two">
             <section class="detail-block user-block">
               <div class="panel-head tight">
-                <h3>当前持仓</h3>
-                <span id="positionStatus">simulated exposure</span>
+                <h3>Earning Curve</h3>
+                <span id="earningStatus">cash + open cost basis</span>
               </div>
-              <div class="position-list" id="positionList"></div>
+              <canvas id="earningCurveChart" width="720" height="240"></canvas>
+              <div class="mini-stats maintainer-actions">
+                <button class="btn secondary" id="maintainerUpdateBtn">Manual update</button>
+                <button class="btn danger" id="maintainerSellBtn">Sell</button>
+                <button class="btn primary" id="maintainerBuyBtn">Purchase</button>
+                <button class="btn primary" id="maintainerRunBtn">Maintain</button>
+              </div>
+              <label class="check-row">
+                <input id="maintainerDryRun" type="checkbox" checked />
+                <span>Dry run</span>
+              </label>
             </section>
             <section class="detail-block user-block">
               <div class="panel-head tight">
-                <h3>历史 Trade 记录</h3>
+                <h3>Strategy</h3>
+                <span id="strategyStatus">latest run</span>
+              </div>
+              <div class="strategy-grid" id="strategyGrid"></div>
+            </section>
+          </div>
+          <div class="user-grid">
+            <section class="detail-block user-block">
+              <div class="panel-head tight">
+                <h3>Current shares</h3>
                 <span id="tradeStatus">paper deals</span>
               </div>
               <div class="trade-list" id="tradeList"></div>
+              <div class="manual-sell-inline" id="manualSellPanel">
+                <div class="manual-sell-head">
+                  <strong id="manualSellTitle">Manual sell</strong>
+                  <span id="maintainerPositionStatus">formal ledger</span>
+                </div>
+                <div class="manual-sell-toolbar">
+                  <button class="btn secondary" id="manualSellSelectAllBtn">Select all</button>
+                  <button class="btn secondary" id="manualSellClearBtn">Clear</button>
+                  <button class="btn danger" id="manualSellSelectedBtn">Sell selected</button>
+                  <button class="btn danger" id="manualSellAllBtn">Sell all holds</button>
+                </div>
+                <div class="position-list compact" id="maintainerPositionList"></div>
+              </div>
+              <div class="merged-decision-list" id="mergedDecisionList"></div>
             </section>
           </div>
+          <section class="detail-block user-block">
+            <div class="panel-head tight">
+              <h3>Maintainer Console</h3>
+              <span id="maintainerConsoleStatus">latest command output</span>
+            </div>
+            <div class="maintainer-console" id="maintainerConsole"></div>
+          </section>
         </section>
 
         <section class="user-section hidden" id="userAgentSection">

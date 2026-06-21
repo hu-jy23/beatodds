@@ -22,7 +22,7 @@
   --shadow: 0 18px 48px rgba(24, 35, 46, 0.10);
   --left-width: minmax(260px, 320px);
   --right-width: minmax(390px, 500px);
-  --topbar-height: 64px;
+  --topbar-height: 88px;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -78,6 +78,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .btn,
   .icon-btn,
@@ -88,7 +93,8 @@ button {
   .event-market-row,
   .report-item,
   .message-item,
-  .timeline-item {
+  .timeline-item,
+  .draggable-panel {
     transition:
       transform 140ms ease,
       box-shadow 140ms ease,
@@ -151,7 +157,8 @@ button {
 }
 
 .rail-head,
-.topbar,
+.topbar-title-row,
+.topbar-action-row,
 .panel-head,
 .analysis-head {
   display: flex;
@@ -197,6 +204,57 @@ h3 {
 
 .search-row {
   padding: 14px 16px 8px;
+}
+
+.search-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.search-add-row .btn {
+  min-width: 48px;
+  height: 36px;
+}
+
+.fresh-topic-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.fresh-topic-row .btn {
+  height: 36px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.fresh-topic-row input {
+  padding: 0 8px;
+}
+
+.topic-add-status {
+  min-height: 18px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.topic-add-status.added {
+  color: var(--green);
+}
+
+.topic-add-status.not_found,
+.topic-add-status.empty {
+  color: var(--amber);
+}
+
+.topic-add-status.pending {
+  color: var(--blue);
 }
 
 input,
@@ -264,9 +322,29 @@ textarea:focus {
 }
 
 .market-list {
-  height: calc(100% - 168px);
+  height: calc(100% - 240px);
   overflow: auto;
   padding: 0 10px 18px;
+}
+
+.market-empty {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+}
+
+.market-empty strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.market-empty span {
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .market-item {
@@ -345,6 +423,11 @@ textarea:focus {
 .tag.amber {
   color: var(--amber);
   background: var(--amber-soft);
+}
+
+.tag.red {
+  color: var(--red);
+  background: var(--red-soft);
 }
 
 .event-market-list {
@@ -434,6 +517,14 @@ textarea:focus {
   line-height: 1;
 }
 
+.token-btn small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
 .token-btn.yes {
   border-color: rgba(27, 143, 98, 0.30);
   background: var(--yes-bg);
@@ -467,6 +558,11 @@ textarea:focus {
   font-weight: 750;
 }
 
+.muted {
+  color: var(--muted);
+  font-weight: 650;
+}
+
 .main-col {
   height: 100%;
   min-width: 0;
@@ -476,13 +572,16 @@ textarea:focus {
 }
 
 .topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
   height: var(--topbar-height);
 }
 
 .global-topbar {
   position: relative;
   z-index: 50;
-  padding: 0 18px;
+  padding: 10px 18px;
   background: color-mix(in srgb, var(--rail) 92%, transparent);
   border-bottom: 1px solid var(--line);
   box-shadow: 0 8px 26px rgba(24, 35, 46, 0.06);
@@ -505,6 +604,12 @@ textarea:focus {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.top-actions {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  max-width: min(760px, 62vw);
 }
 
 .dropdown-wrap {
@@ -555,7 +660,9 @@ textarea:focus {
 
 .account-row {
   display: grid;
-  gap: 3px;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 6px;
   width: 100%;
   padding: 10px;
   color: var(--text);
@@ -571,9 +678,25 @@ textarea:focus {
   background: var(--blue-soft);
 }
 
-.account-row span {
+.account-select-btn {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+
+.account-row span,
+.account-select-btn span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.account-delete-btn {
+  color: var(--red);
 }
 
 .create-user {
@@ -732,6 +855,45 @@ body:has(.app-shell.right-collapsed) #showRight {
   transition:
     border-color 160ms ease,
     background-color 160ms ease;
+}
+
+.draggable-panel {
+  position: relative;
+  resize: vertical;
+  min-height: 96px;
+  max-height: 720px;
+  overflow: auto;
+}
+
+.draggable-panel::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid #c8d4dc;
+  border-bottom: 2px solid #c8d4dc;
+  pointer-events: none;
+}
+
+.draggable-panel.dragging {
+  opacity: 0.58;
+  transform: scale(0.992);
+}
+
+.draggable-panel.drag-target {
+  outline: 2px solid rgba(47, 109, 246, 0.24);
+}
+
+.draggable-panel .panel-head,
+.analysis-head {
+  cursor: grab;
+}
+
+.draggable-panel:active .panel-head,
+.analysis-panel:active .analysis-head {
+  cursor: grabbing;
 }
 
 .analysis-panel.stance-observe {
@@ -926,6 +1088,93 @@ body:has(.app-shell.right-collapsed) #showRight {
   margin-bottom: 10px;
 }
 
+.mini-stats.maintainer-actions {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 10px 0;
+}
+
+.manual-sell-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.manual-sell-inline {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.manual-sell-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.manual-sell-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.manual-sell-toolbar .btn {
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.manual-sell-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(88px, auto) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  cursor: pointer;
+}
+
+.manual-sell-card.selected {
+  border-color: var(--blue);
+  background: rgba(47, 109, 246, 0.08);
+}
+
+.manual-sell-card input {
+  width: 16px;
+  height: 16px;
+}
+
+.manual-sell-main {
+  min-width: 0;
+}
+
+.manual-sell-main strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.manual-sell-main small,
+.manual-sell-side {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.manual-sell-side {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.position-list.compact {
+  max-height: 260px;
+}
+
 .mini-stat {
   padding: 9px;
   border-radius: 8px;
@@ -943,6 +1192,76 @@ body:has(.app-shell.right-collapsed) #showRight {
   display: block;
   margin-top: 3px;
   font-size: 15px;
+}
+
+.strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.strategy-cell {
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.strategy-cell span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.strategy-cell strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 14px;
+}
+
+.maintainer-console {
+  display: grid;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.console-log-row {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--rail);
+}
+
+.console-log-row.error {
+  border-color: var(--red);
+  background: var(--no-bg);
+}
+
+.console-log-row div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.console-log-row span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.console-log-row p,
+.console-log-row pre {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.console-log-row pre {
+  max-height: 90px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .report-list,
@@ -1064,8 +1383,20 @@ body:has(.app-shell.right-collapsed) #showRight {
 
 .topic-chart-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 10px;
+}
+
+.chart-card {
+  display: grid;
+  gap: 6px;
+}
+
+.chart-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .detail-block.console-panel,
@@ -1094,6 +1425,38 @@ canvas {
   display: block;
   border-radius: 8px;
   background: var(--panel);
+}
+
+.chart-tooltip {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  gap: 2px;
+  min-width: 118px;
+  padding: 7px 9px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.chart-tooltip.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.chart-tooltip strong {
+  font-size: 13px;
+}
+
+.chart-tooltip span {
+  color: var(--muted);
 }
 
 .data-status {
@@ -1389,6 +1752,60 @@ canvas {
   box-shadow: var(--shadow);
 }
 
+.user-section-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 0;
+}
+
+.user-section-toolbar h2 {
+  margin: 2px 0 0;
+  font-size: 18px;
+}
+
+.account-money-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.account-money-cell {
+  min-height: 78px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.account-money-cell span,
+.account-money-cell small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-money-cell strong {
+  display: block;
+  margin: 5px 0;
+  color: var(--text);
+  font-size: 20px;
+}
+
+.account-money-cell.positive strong {
+  color: var(--green);
+}
+
+.account-money-cell.negative strong {
+  color: var(--red);
+}
+
+.account-money-cell.muted strong {
+  color: var(--muted);
+}
+
 .user-stat-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1435,6 +1852,55 @@ canvas {
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
 }
 
+.eval-curve-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.eval-curve-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--rail);
+}
+
+.eval-curve-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.eval-curve-head strong,
+.eval-curve-head small,
+.eval-curve-meta span {
+  display: block;
+}
+
+.eval-curve-head small,
+.eval-curve-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.eval-curve-card code {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eval-curve-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .user-block {
   margin: 0;
   overflow: visible;
@@ -1468,6 +1934,48 @@ canvas {
   gap: 8px;
   max-height: 420px;
   overflow-y: auto;
+}
+
+.merged-decision-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.merged-decision-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.merged-decision-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  font-weight: 800;
+}
+
+.merged-decision-toggle span {
+  width: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.merged-decision-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.merged-decision-body {
+  display: grid;
+  gap: 8px;
 }
 
 .transaction-row,
@@ -1567,6 +2075,12 @@ canvas {
   font-size: 14px;
 }
 
+.expected-positive,
+.expected-negative {
+  color: var(--muted);
+  font-weight: 800;
+}
+
 .transaction-row small,
 .trade-row small {
   color: var(--text-soft);
@@ -1579,6 +2093,13 @@ canvas {
   text-decoration: none;
 }
 
+.evidence-item span {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .event-text-block p {
   max-height: 260px;
   margin: 0;
@@ -1589,7 +2110,104 @@ canvas {
   white-space: pre-wrap;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(23, 32, 39, 0.36);
+}
+
+.modal-backdrop.open {
+  display: flex;
+}
+
+.modal {
+  width: min(520px, 100%);
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  animation: modalIn 160ms ease;
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-copy {
+  margin: 12px 0;
+  color: #33434f;
+  line-height: 1.45;
+}
+
+.choice-group {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.choice-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.choice-card strong,
+.choice-card small,
+.count-field {
+  display: block;
+}
+
+.choice-card small {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.count-field {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.count-field input {
+  margin-top: 6px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 @media (max-width: 980px) {
+  :root {
+    --topbar-height: 112px;
+  }
+
+  .global-topbar {
+    align-content: center;
+    flex-wrap: wrap;
+  }
+
+  .top-actions {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
+
   .app-shell,
   .app-shell.left-collapsed,
   .app-shell.right-collapsed,
@@ -1662,6 +2280,10 @@ canvas {
     grid-template-columns: 1fr;
   }
 
+  .eval-curve-grid {
+    grid-template-columns: 1fr;
+  }
+
   .market-exposure-row {
     grid-template-columns: 1fr;
   }
@@ -1670,7 +2292,7 @@ canvas {
 
 @media (max-width: 620px) {
   :root {
-    --topbar-height: 104px;
+    --topbar-height: 128px;
   }
 
   .global-topbar {
@@ -1682,6 +2304,7 @@ canvas {
 
   .top-actions {
     width: 100%;
+    max-width: none;
     justify-content: flex-start;
   }
 
@@ -1725,5 +2348,16 @@ canvas {
   }
   100% {
     transform: scale(1);
+  }
+}
+
+@keyframes modalIn {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }

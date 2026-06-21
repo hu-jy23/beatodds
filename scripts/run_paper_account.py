@@ -18,6 +18,8 @@ from beatodds.evaluation.paper_store import (
     load_account_transactions,
     load_paper_account,
     load_paper_accounts,
+    load_paper_orders,
+    load_paper_positions,
     release_reserved_cash,
     reserve_cash,
     update_risk_params,
@@ -68,6 +70,36 @@ def _print_transactions(account_id: str, limit: int) -> None:
         )
 
 
+def _print_orders(account_id: str, limit: int) -> None:
+    orders = load_paper_orders(account_id, limit=limit)
+    if not orders:
+        print("No paper orders.")
+        return
+    print(f"\nPAPER ORDERS ({len(orders)} shown)")
+    for order in orders:
+        print(
+            f"{order.created_at.isoformat()}  {order.status:<7}  {order.side:<3}  "
+            f"notional={order.filled_notional:.2f}  shares={order.filled_shares:.4f}  "
+            f"avg={order.avg_price:.3f}  net_edge={order.net_edge:+.3f}"
+        )
+        print(f"  {order.condition_id}  {order.question[:90]}")
+
+
+def _print_positions(account_id: str) -> None:
+    positions = load_paper_positions(account_id)
+    if not positions:
+        print("No open paper positions.")
+        return
+    print(f"\nPAPER POSITIONS ({len(positions)} open)")
+    for position in positions:
+        print(
+            f"{position.side:<3}  cost={position.cost_basis:.2f}  "
+            f"shares={position.shares:.4f}  avg={position.avg_price:.3f}  "
+            f"fees={position.fees_paid:.2f}"
+        )
+        print(f"  {position.condition_id}  {position.question[:90]}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manage BeatOdds paper trading accounts")
     parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
@@ -77,6 +109,8 @@ def main() -> None:
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--transactions", action="store_true")
+    parser.add_argument("--orders", action="store_true")
+    parser.add_argument("--positions", action="store_true")
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--deposit", type=float)
     parser.add_argument("--withdraw", type=float)
@@ -159,6 +193,10 @@ def main() -> None:
         _print_account(account)
     if args.transactions:
         _print_transactions(args.account_id, args.limit)
+    if args.orders:
+        _print_orders(args.account_id, args.limit)
+    if args.positions:
+        _print_positions(args.account_id)
 
 
 if __name__ == "__main__":

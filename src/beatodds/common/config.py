@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # Scanner thresholds
+    scanner_market_limit: int = 500
+    scanner_gamma_page_limit: int = 100
     scanner_min_volume_24h: float = 100.0    # USD
     scanner_min_days_to_close: float = 1.0
     scanner_max_spread: float = 0.10         # 10¢ max spread to be liquid enough

@@ -91,6 +91,9 @@ def _print_market_history(condition_id: str) -> None:
     if features:
         queries = "; ".join(features.search_queries[:4])
         print(f"  condition_type = {features.condition_type}")
+        print(f"  event_type = {features.event_type}  china = {features.china_relevance}")
+        if features.source_routing_hints:
+            print(f"  source_routes = {'; '.join(features.source_routing_hints[:4])}")
         print(f"  search_queries = {queries or '?'}")
 
     print(f"\n  Snapshots ({len(snapshots)} shown)")
@@ -117,7 +120,8 @@ def _print_market_history(condition_id: str) -> None:
         print(f"\n  Latest Run Evidence ({len(evidence)} shown)")
         for item in evidence:
             print(
-                f"  score={item.relevance_score:.3f}  query={item.query[:70] or '?'}"
+                f"  score={item.relevance_score:.3f}  type={item.source_type}  "
+                f"query={item.query[:70] or '?'}"
             )
             print(f"    {item.source}: {item.title[:110]}")
 
@@ -159,12 +163,16 @@ def _print_due_markets(stale_hours: float, limit: int) -> None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--top", type=int, default=10)
+    parser.add_argument("--scan-limit", type=int,
+                        help="Number of liquid Gamma markets to scan before eval filters")
     parser.add_argument("--exclude-sports", action="store_true",
                         help="Skip World Cup / NBA and other sports markets")
     parser.add_argument("--min-prob", type=float, default=0.0,
                         help="Minimum market midpoint probability (default 0 = no filter)")
     parser.add_argument("--max-prob", type=float, default=1.0,
                         help="Maximum market midpoint probability (default 1 = no filter)")
+    parser.add_argument("--china-info", action="store_true",
+                        help="Enable China-specific query expansion and source routing")
     parser.add_argument("--show-stored", action="store_true",
                         help="Print all stored EvalRecords from DuckDB and exit")
     parser.add_argument("--show-workflow", action="store_true",
@@ -250,7 +258,7 @@ def main():
         return
 
     # --- Scan ---
-    scanner = Scanner()
+    scanner = Scanner(market_limit=args.scan_limit)
     candidates = scanner.scan()
     tradeable = [c for c in candidates if c.snapshot.spread < 0.05]
     logger.info(f"Scanner: {len(candidates)} candidates, {len(tradeable)} tradeable")
@@ -293,14 +301,20 @@ def main():
         logger.info(f"[{i+1}/{len(targets)}] {q[:60]}")
 
         features = rp.parse(c.market)
-        evidence, frozen_at = retriever.retrieve(c, features)
+        evidence, frozen_at = retriever.retrieve(
+            c,
+            features,
+            enable_china_info=args.china_info,
+        )
         forecast = forecaster.forecast(c, evidence, frozen_at)
+        signal_type = "china_enhanced_llm" if args.china_info else "search_only_llm"
         save_forecast_run(
             candidate=c,
             features=features,
             evidence=evidence,
             forecast=forecast,
             evidence_frozen_at=frozen_at,
+            signal_type=signal_type,
         )
 
         p_m = c.snapshot.midpoint
@@ -310,6 +324,11 @@ def main():
         print(f"     cat={c.market.category or '?'}  p_m={p_m:.3f}  "
               f"p_f={forecast.p_f:.3f}  edge={edge:+.3f}  "
               f"conf={forecast.confidence:.2f}  ev={len(evidence)}")
+        if args.china_info:
+            print(
+                f"     china={features.china_relevance}  event={features.event_type}  "
+                f"routes={len(features.source_routing_hints)}"
+            )
         print(f"     {forecast.reasoning[:100]}")
 
         eval_records.append(EvalRecord(
@@ -318,7 +337,7 @@ def main():
             p_m=p_m,
             p_f=forecast.p_f,
             evidence_frozen_at=frozen_at,
-            signal_type="evidence",
+            signal_type="china_enhanced" if args.china_info else "evidence",
             model_version=forecast.model,
         ))
 

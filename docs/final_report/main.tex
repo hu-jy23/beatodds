@@ -1,0 +1,59 @@
+\documentclass{article}
+
+% Use final for the project report draft so authors and acknowledgments are visible.
+\usepackage[final]{neurips_2026}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{placeins}
+\usepackage{float}
+\usepackage{hyperref}
+
+\title{BeatOdds: Stateful Social-Media-Augmented Forecasting for Prediction-Market Mispricing}
+
+\author{
+  Jiayi Hu, Minyang Xie, Wenxin Xu \\
+  Tsinghua University \\
+  \texttt{\{hujy23, xiemy23, xuwx23\}@tsinghua.edu.cn}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Prediction markets aggregate dispersed beliefs into tradable prices, but practical forecasting agents must reason under severe information constraints: event definitions are heterogeneous, evidence arrives over time, market prices can anchor model forecasts, and resolved outcomes may occur long after a signal is produced. This report presents \textbf{BeatOdds}, a stateful social-media-augmented forecasting system that scans Polymarket-style markets, retrieves and audits evidence, generates leakage-aware forecasts, stores full workflow state, and simulates paper trading decisions. Our project makes \textbf{three contributions}: First, we introduce an \textbf{MD-defined evidence harness} that organizes auditable evidence collection from both raw sources and high-quality social-media artifacts encoding human search and expert judgment. Second, we build a \textbf{searching agent} that iteratively selects searches, maintains evidence pools, processes artifacts, and produces human-readable trajectories before estimating probabilities. Third, we evaluate the system through \textbf{case studies} focused on evidence use, transparency, and forecasting behavior, emphasizing scientific evaluation over single-run anecdotal accuracy.
+\end{abstract}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\linewidth]{figures/harness_video_subagent_variant_02.png}
+  \caption{\textbf{Social-media/video evidence harness.} The main forecasting agent maintains an event workspace and delegates expensive source processing to specialized workers. Returned artifacts remain auditable and are reintroduced only as concise evidence reports.}
+  \label{fig:harness-video-subagent}
+\end{figure}
+
+\input{sections/01_introduction}
+\input{sections/02_problem_setting}
+\input{sections/03_system_overview}
+\input{sections/04_agentic_harness}
+\input{sections/05_stateful_data_trading}
+\input{sections/06_baselines_evaluation}
+\input{sections/07_case_studies}
+\input{sections/08_discussion}
+\input{sections/09_limitations_ethics}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\input{checklist}
+
+\end{document}

@@ -1,0 +1,19 @@
+\begin{thebibliography}{2}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[{AIA Labs}(2025)]{aiaforecaster2025}
+{AIA Labs}.
+\newblock Aia forecaster: Technical report, 2025.
+\newblock Technical report on multi-agent LLM forecasting.
+
+\bibitem[{MiroMind AI}(2026)]{miroflow2026}
+{MiroMind AI}.
+\newblock Miroflow: Towards high-performance and robust general deep research
+  open agent framework, 2026.
+\newblock Agent framework report.
+
+\end{thebibliography}

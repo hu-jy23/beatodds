@@ -1,0 +1,13 @@
+\section{Introduction}
+
+Prediction markets provide continuously updated, financially meaningful probabilities, yet a useful forecasting system must handle constraints that static question-answering benchmarks do not expose. It must identify tradable contracts, parse their resolution semantics, collect evidence available at the decision time, convert that evidence into a probability, and retain enough state to evaluate the decision after the market resolves. BeatOdds is an end-to-end system for this setting. It treats the market price as a baseline, exposes the forecast process, and links each forecast to its simulated trading consequences.
+
+\textbf{Social-media-augmented forecasting.} Public posts, videos, and specialist discussions can contain useful intermediate reasoning: their authors may have gathered facts, formed domain priors, and identified future catalysts before an agent begins its own search. BeatOdds does not treat such material as authoritative evidence by default. It records source provenance, search query, retrieval time, and the role each artifact played in the final forecast. This supports skeptical use of semi-processed human judgment alongside official sources and direct reporting.
+
+\textbf{Contributions.}
+\begin{itemize}[leftmargin=*]
+  \item A live, stateful pipeline joining Polymarket market discovery, order-book snapshots, resolution parsing, evidence retrieval, LLM forecasting, ranking, and paper trading.
+  \item An auditable evidence harness that freezes evidence at forecast time and persists source-level provenance together with the final answer.
+  \item A durable evaluation and ledger layer: 65 tracked markets, 151 persisted forecast runs, 2,583 evidence items, and 58 paper orders in the local experiment state at the reporting cutoff.
+  \item A cautious empirical analysis: we report executable paper marks and system behavior, while separating these preliminary marks from resolved-outcome forecasting accuracy.
+\end{itemize}

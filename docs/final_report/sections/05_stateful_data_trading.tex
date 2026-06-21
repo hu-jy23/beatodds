@@ -1,0 +1,19 @@
+\section{Stateful Data and Paper Trading Layer}
+
+Live evaluation is inherently longitudinal. The workflow database stores long-lived market identities, append-only price snapshots, parsed resolution features, forecast runs, source-level evidence items, outcomes, and compact evaluation records. A run can therefore be reconstructed from its market quote, evidence cutoff, parser output, forecast probability, confidence, model identifier, and explanation.
+
+\subsection{Workflow state and temporal integrity}
+
+The workflow store is designed around an append-only evidence chain. \texttt{tracked\_markets} provides the stable condition identifier and first/last-seen times; \texttt{market\_snapshots} captures the token, bid, ask, midpoint, spread, and quote time; \texttt{resolution\_features} records the parser output; and \texttt{forecast\_runs} ties a probability and model version back to an evidence cutoff. The evidence table stores each returned source separately, including query provenance. This schema supports two important queries: which markets are due for refresh under a stale-hours policy, and which information was available when a particular forecast was made.
+
+Timezone normalization is part of the validity condition. Stored forecast and evidence timestamps are converted to UTC-naive values before DuckDB insertion, avoiding silent comparisons between local and UTC times. On every re-forecast, the prior run remains available. This permits later analysis of probability revisions and evidence additions, and prevents a current market quote from being mistaken for the quote used to initiate an old trade.
+
+\subsection{Order lifecycle and valuation}
+
+The paper ledger extends the workflow chain with \texttt{paper\_accounts}, transactions, orders, fills, and aggregated positions. A buy records the selected side, ask-depth fill price, shares, fee, market probability, fair probability, gross and net edge, confidence, and the originating forecast run. Fills debit cash through a durable trade transaction; positions are aggregated by account, condition, and side. A sell reduces those shares, credits the account, and records realized PnL from the same cost basis and fee fields.
+
+A mark is deliberately conservative. When available, the current value is shares times the live best bid, which approximates liquidation. When no live executable bid is available, the evaluator may use the latest exact-token history or a report-history value, with an explicit valuation-only label. This distinction matters because resolved markets can stop trading and because midpoint reconstruction does not model depth consumption or exit capacity.
+
+\subsection{Risk controls and maintenance}
+
+Risk controls cap ticket size, market exposure, total exposure, and maintain a cash buffer. The maintainer selects YES or NO using the side-specific fair probability, requires gross edge, net edge, and confidence thresholds, and sizes tickets as a bounded fraction of available cash. Existing exposure is included when calculating the remaining market capacity, preventing repeated maintenance passes from silently concentrating the account. The same component can propose profit-taking, score-based, and stop-loss exits; manual sells remain available for inspection. Thus the paper-trading system tests whether the forecasting path survives basic portfolio accounting under execution risk.

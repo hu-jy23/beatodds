@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -69,6 +70,45 @@ def _tag_labels(raw_event: dict[str, Any]) -> list[str]:
     return labels
 
 
+def _search_terms(value: str) -> list[str]:
+    return [term for term in re.split(r"[^a-z0-9]+", value.lower()) if len(term) >= 2]
+
+
+def _search_score(raw: dict[str, Any], query: str) -> float:
+    query_text = query.strip().lower()
+    if not query_text:
+        return 0.0
+    condition_id = str(raw.get("conditionId") or raw.get("condition_id") or "").lower()
+    numeric_id = str(raw.get("id") or "").lower()
+    slug = str(raw.get("slug") or "").lower()
+    question = str(raw.get("question") or raw.get("title") or "").lower()
+    category = str(raw.get("category") or "").lower()
+    event_titles: list[str] = []
+    raw_events = raw.get("events") or []
+    if isinstance(raw_events, list):
+        for event in raw_events:
+            if isinstance(event, dict):
+                event_titles.append(str(event.get("title") or event.get("slug") or "").lower())
+    haystack = " ".join([question, slug, category, *event_titles])
+
+    if query_text in {condition_id, numeric_id, slug}:
+        return 1000.0
+    if query_text and query_text in question:
+        return 850.0
+    if query_text and query_text in haystack:
+        return 700.0
+
+    terms = _search_terms(query_text)
+    if not terms:
+        return 0.0
+    matched = sum(1 for term in terms if term in haystack)
+    required = 1 if len(terms) <= 2 else max(2, int(len(terms) * 0.6))
+    if matched < required:
+        return 0.0
+    volume = _float(raw.get("volume24hr") or raw.get("volume24hrClob"))
+    return matched / len(terms) * 500.0 + min(volume, 100_000.0) / 100_000.0
+
+
 class GammaClient:
     def __init__(self, timeout_s: float = 30.0):
         self.cfg = get_settings()
@@ -90,8 +130,58 @@ class GammaClient:
         self,
         limit: int = 500,
         min_volume_24h: float = 100.0,
+        page_limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Return active markets ordered by 24h volume."""
+        if limit <= 0:
+            return []
+        page_limit = page_limit or self.cfg.scanner_gamma_page_limit
+        page_limit = max(1, min(page_limit, limit))
+        markets: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        offset = 0
+        while len(markets) < limit:
+            batch_limit = min(page_limit, limit - len(markets))
+            resp = self._client.get(
+                "/markets",
+                params={
+                    "active": "true",
+                    "closed": "false",
+                    "order": "volume24hr",
+                    "ascending": "false",
+                    "limit": batch_limit,
+                    "offset": offset,
+                    "volume_num_min": min_volume_24h,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                break
+            before = len(markets)
+            for item in data:
+                key = str(item.get("conditionId") or item.get("condition_id") or "")
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                markets.append(item)
+                if len(markets) >= limit:
+                    break
+            if len(data) < batch_limit or len(markets) == before:
+                break
+            offset += len(data)
+        return markets
+
+    def get_liquid_markets_page(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        min_volume_24h: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        """Return one Gamma market page ordered by 24h volume."""
+        if limit <= 0:
+            return []
         resp = self._client.get(
             "/markets",
             params={
@@ -100,12 +190,143 @@ class GammaClient:
                 "order": "volume24hr",
                 "ascending": "false",
                 "limit": limit,
+                "offset": max(0, offset),
                 "volume_num_min": min_volume_24h,
             },
         )
         resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, list) else []
+
+    def get_active_markets(
+        self,
+        limit: int = 500,
+        page_limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return a broad online active-market sample from Gamma."""
+        if limit <= 0:
+            return []
+        page_limit = page_limit or self.cfg.scanner_gamma_page_limit
+        page_limit = max(1, min(page_limit, limit))
+        markets: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        offset = 0
+        while len(markets) < limit:
+            batch_limit = min(page_limit, limit - len(markets))
+            resp = self._client.get(
+                "/markets",
+                params={
+                    "active": "true",
+                    "closed": "false",
+                    "limit": batch_limit,
+                    "offset": offset,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                break
+            before = len(markets)
+            for item in data:
+                key = str(item.get("conditionId") or item.get("condition_id") or "")
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                markets.append(item)
+                if len(markets) >= limit:
+                    break
+            if len(data) < batch_limit or len(markets) == before:
+                break
+            offset += len(data)
+        return markets
+
+    def get_market(self, market_id: str) -> dict[str, Any] | None:
+        """Fetch one Gamma market by its numeric Gamma id."""
+        if not market_id:
+            return None
+        resp = self._client.get(f"/markets/{market_id}")
+        if resp.status_code == 422:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+
+    def get_markets_by_condition_id(self, condition_id: str) -> list[dict[str, Any]]:
+        """Fetch Gamma markets matching a CLOB condition id."""
+        if not condition_id:
+            return []
+        resp = self._client.get(
+            "/markets",
+            params={"condition_ids": condition_id, "limit": 10},
+        )
+        if resp.status_code == 422:
+            return []
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
+    def get_markets_by_slug(self, slug: str) -> list[dict[str, Any]]:
+        """Fetch Gamma markets matching an exact market slug."""
+        if not slug:
+            return []
+        resp = self._client.get("/markets", params={"slug": slug, "limit": 10})
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
+    def search_markets(
+        self,
+        query: str,
+        limit: int = 8,
+        scan_limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Search live Gamma markets without consulting local storage.
+
+        Gamma's public text parameters currently behave like an unfiltered feed
+        for many queries, so this uses exact online lookups first and then
+        ranks a live paged market sample client-side.
+        """
+        query = query.strip()
+        if not query or limit <= 0:
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def add(raw: dict[str, Any]) -> None:
+            key = str(raw.get("conditionId") or raw.get("condition_id") or raw.get("id") or "")
+            if not key or key in seen:
+                return
+            seen.add(key)
+            candidates.append(raw)
+
+        if query.lower().startswith("0x"):
+            for raw in self.get_markets_by_condition_id(query):
+                add(raw)
+        if query.isdigit():
+            raw_market = self.get_market(query)
+            if raw_market:
+                add(raw_market)
+        slug_query = query.lower().strip().replace(" ", "-")
+        for raw in self.get_markets_by_slug(slug_query):
+            add(raw)
+
+        for raw in self.get_liquid_markets(limit=max(limit, scan_limit), min_volume_24h=0.0):
+            add(raw)
+        for raw in self.get_active_markets(limit=max(limit, scan_limit)):
+            add(raw)
+
+        scored = [(_search_score(raw, query), raw) for raw in candidates]
+        scored = [(score, raw) for score, raw in scored if score > 0]
+        scored.sort(
+            key=lambda item: (
+                item[0],
+                _float(item[1].get("volume24hr") or item[1].get("volume24hrClob")),
+            ),
+            reverse=True,
+        )
+        return [raw for _, raw in scored[:limit]]
 
     def get_event_markets(self, event_id: str) -> list[MarketMeta]:
         """Fetch all markets in one Gamma event, used for complete neg-risk groups."""

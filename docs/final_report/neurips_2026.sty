@@ -1,0 +1,78 @@
+% Local fallback style for a NeurIPS-like final project report.
+% Replace with the official neurips_2026.sty author-kit file before external submission.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{neurips_2026}[2026/06/18 local fallback NeurIPS-style report package]
+
+\newif\if@neuripsfinal
+\newif\if@preprint
+\@neuripsfinalfalse
+\@preprintfalse
+
+\DeclareOption{final}{\@neuripsfinaltrue}
+\DeclareOption{preprint}{\@preprinttrue}
+\DeclareOption{main}{}
+\DeclareOption{position}{}
+\DeclareOption{datasets}{}
+\DeclareOption{creativeai}{}
+\DeclareOption{nonatbib}{}
+\ProcessOptions\relax
+
+\RequirePackage[letterpaper,margin=1in]{geometry}
+\RequirePackage{times}
+\RequirePackage{natbib}
+\RequirePackage{fancyhdr}
+\RequirePackage{titlesec}
+\RequirePackage{environ}
+\RequirePackage{xcolor}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\renewcommand{\baselinestretch}{0.98}
+
+\titleformat{\section}{\large\bfseries}{\thesection}{0.75em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.75em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.75em}{}
+
+\newcommand{\And}{\end{tabular}\hfil\linebreak[0]\hfil\begin{tabular}[t]{c}}
+\newcommand{\AND}{\end{tabular}\hfil\linebreak[4]\hfil\begin{tabular}[t]{c}}
+
+\if@preprint
+  \newcommand{\@noticestring}{Preprint. Work in progress.}
+\else
+  \if@neuripsfinal
+    \newcommand{\@noticestring}{Final project report, NeurIPS-style format.}
+  \else
+    \newcommand{\@noticestring}{Anonymous project report, NeurIPS-style format.}
+  \fi
+\fi
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\@noticestring}
+\rhead{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\renewcommand{\maketitle}{%
+  \begin{center}
+    {\LARGE\bfseries \@title \par}
+    \vspace{0.75em}
+    \if@neuripsfinal
+      {\normalsize \@author \par}
+    \else
+      {\normalsize Anonymous Authors \par}
+    \fi
+    \vspace{1em}
+  \end{center}
+}
+
+\if@neuripsfinal
+  \NewEnviron{ack}{\section*{Acknowledgments}\BODY}
+\else
+  \NewEnviron{ack}{}
+\fi
+
+\newcommand{\answerYes}[1][]{\textcolor{blue}{[Yes] #1}}
+\newcommand{\answerNo}[1][]{\textcolor{red}{[No] #1}}
+\newcommand{\answerNA}[1][]{\textcolor{gray}{[NA] #1}}
+\newcommand{\answerTODO}[1][]{\textcolor{orange}{[TODO] #1}}
+\newcommand{\justificationTODO}[1][]{\textcolor{orange}{[TODO] #1}}

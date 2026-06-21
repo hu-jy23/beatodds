@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -126,8 +126,28 @@ class RelationGraph(BaseModel):
 class ResolutionFeatures(BaseModel):
     condition_id: str
     condition_type: str = "unknown"   # 'price_threshold', 'event_occurrence', 'date_range', ...
+    event_type: Literal[
+        "macro_data",
+        "policy",
+        "regulation",
+        "diplomacy_trade",
+        "company",
+        "financial_market",
+        "real_estate",
+        "public_health",
+        "social_incident",
+        "technology",
+        "military_security",
+        "sports",
+        "election",
+        "other",
+    ] = "other"
+    china_relevance: Literal["high", "medium", "low"] = "low"
     key_entities: list[str] = Field(default_factory=list)   # names, tickers, places
     search_queries: list[str] = Field(default_factory=list) # queries for Tavily
+    geography: list[str] = Field(default_factory=list)
+    resolution_source_hint: str = ""
+    source_routing_hints: list[str] = Field(default_factory=list)
     has_explicit_deadline: bool = False
     deadline_date: datetime | None = None
     oracle_type: Literal["UMA", "admin", "external_feed", "unknown"] = "unknown"
@@ -148,13 +168,38 @@ class EvidenceItem(BaseModel):
     url: str
     source: str
     published_at: datetime
+    retrieved_at: datetime | None = None
     relevance_score: float = 0.0
+    provider: str = "tavily"
+    source_type: Literal[
+        "baseline",
+        "central_official",
+        "local_official",
+        "regulator",
+        "exchange_filing",
+        "company_filing",
+        "procurement",
+        "land_construction",
+        "official_media",
+        "western_crosscheck",
+        "platform_signal",
+        "western_source",
+        "china_general",
+        "other",
+    ] = "western_source"
+    direction: Literal["supports_yes", "supports_no", "neutral", "ambiguous"] = "neutral"
+    strength: float = 0.0
+    resolution_relevance: float = 0.0
+    reliability_prior: float = 0.0
+    dedupe_key: str = ""
+    raw_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ForecastResult(BaseModel):
     condition_id: str
     p_f: float                       # fair probability estimate
     confidence: float
+    forecast_direction: Literal["tend_yes", "tend_no", "observe"] = "observe"
     evidence_items: list[EvidenceItem] = Field(default_factory=list)
     reasoning: str = ""
     frozen_at: datetime              # evidence cutoff — must be < snapshot_time
@@ -245,6 +290,7 @@ class PaperAccountTransaction(BaseModel):
         "reserve",
         "release",
         "adjust",
+        "trade",
     ]
     cash_delta: float
     reserved_delta: float = 0.0
@@ -256,3 +302,61 @@ class PaperAccountTransaction(BaseModel):
     ref_id: str = ""
     memo: str = ""
     created_at: datetime
+
+
+class PaperOrder(BaseModel):
+    order_id: str
+    account_id: str
+    run_id: str
+    condition_id: str
+    event_id: str = ""
+    category: str = ""
+    question: str = ""
+    token_id: str
+    side: Literal["YES", "NO"]
+    action: Literal["buy", "sell"] = "buy"
+    status: Literal["filled", "partial", "rejected"] = "filled"
+    requested_notional: float
+    filled_notional: float = 0.0
+    filled_shares: float = 0.0
+    avg_price: float = 0.0
+    fee: float = 0.0
+    p_m_yes: float
+    p_f_yes: float
+    side_fair_prob: float
+    gross_edge: float
+    net_edge: float
+    confidence: float
+    forecast_run_id: str = ""
+    decision_reason: str = ""
+    created_at: datetime
+
+
+class PaperFill(BaseModel):
+    fill_id: str
+    order_id: str
+    account_id: str
+    condition_id: str
+    token_id: str
+    side: Literal["YES", "NO"]
+    price: float
+    shares: float
+    notional: float
+    fee: float = 0.0
+    filled_at: datetime
+
+
+class PaperPosition(BaseModel):
+    account_id: str
+    condition_id: str
+    token_id: str
+    side: Literal["YES", "NO"]
+    event_id: str = ""
+    category: str = ""
+    question: str = ""
+    shares: float
+    avg_price: float
+    cost_basis: float
+    fees_paid: float = 0.0
+    opened_at: datetime
+    updated_at: datetime

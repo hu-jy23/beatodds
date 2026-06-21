@@ -14,3 +14,9 @@ wheels/
 
 # Runtime data
 /data/
+/workspace/
+
+# Local agent notes and image-generation scratch variants
+/.learnings/
+/harness_*_variants/
+/docs/final_report/template_sources/

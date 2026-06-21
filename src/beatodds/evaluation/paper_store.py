@@ -13,7 +13,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from beatodds.common.config import get_settings
-from beatodds.common.types import PaperAccount, PaperAccountTransaction
+from beatodds.common.types import (
+    PaperAccount,
+    PaperAccountTransaction,
+    PaperFill,
+    PaperOrder,
+    PaperPosition,
+)
 
 DEFAULT_ACCOUNT_ID = "demo"
 _SCHEMA_LOCK = threading.Lock()
@@ -96,6 +102,68 @@ def ensure_schema(conn) -> None:
             ref_id           TEXT,
             memo             TEXT,
             created_at       TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_orders (
+            order_id             TEXT PRIMARY KEY,
+            account_id           TEXT,
+            run_id               TEXT,
+            condition_id         TEXT,
+            event_id             TEXT,
+            category             TEXT,
+            question             TEXT,
+            token_id             TEXT,
+            side                 TEXT,
+            action               TEXT,
+            status               TEXT,
+            requested_notional   DOUBLE,
+            filled_notional      DOUBLE,
+            filled_shares        DOUBLE,
+            avg_price            DOUBLE,
+            fee                  DOUBLE,
+            p_m_yes              DOUBLE,
+            p_f_yes              DOUBLE,
+            side_fair_prob       DOUBLE,
+            gross_edge           DOUBLE,
+            net_edge             DOUBLE,
+            confidence           DOUBLE,
+            forecast_run_id      TEXT,
+            decision_reason      TEXT,
+            created_at           TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_fills (
+            fill_id       TEXT PRIMARY KEY,
+            order_id      TEXT,
+            account_id    TEXT,
+            condition_id  TEXT,
+            token_id      TEXT,
+            side          TEXT,
+            price         DOUBLE,
+            shares        DOUBLE,
+            notional      DOUBLE,
+            fee           DOUBLE,
+            filled_at     TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_positions (
+            account_id    TEXT,
+            condition_id  TEXT,
+            token_id      TEXT,
+            side          TEXT,
+            event_id      TEXT,
+            category      TEXT,
+            question      TEXT,
+            shares        DOUBLE,
+            avg_price     DOUBLE,
+            cost_basis    DOUBLE,
+            fees_paid     DOUBLE,
+            opened_at     TIMESTAMP,
+            updated_at    TIMESTAMP,
+            PRIMARY KEY (account_id, condition_id, side)
         )
     """)
     conn.commit()
@@ -257,6 +325,66 @@ def load_paper_accounts(limit: int = 50) -> list[PaperAccount]:
     """, [limit]).fetchall()
     conn.close()
     return [_account_from_row(row) for row in rows]
+
+
+def delete_paper_account(account_id: str) -> dict[str, int | bool | str]:
+    """Delete one local paper account and all formal paper ledger rows for it."""
+    if not account_id:
+        raise ValueError("account_id is required")
+    conn = _connect()
+    existing = conn.execute(
+        "SELECT account_id FROM paper_accounts WHERE account_id = ?",
+        [account_id],
+    ).fetchone()
+    if existing is None:
+        conn.close()
+        return {
+            "account_id": account_id,
+            "deleted": False,
+            "paper_fills": 0,
+            "paper_orders": 0,
+            "paper_positions": 0,
+            "paper_account_transactions": 0,
+            "paper_accounts": 0,
+        }
+
+    counts = {
+        "paper_fills": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM paper_fills WHERE account_id = ?",
+                [account_id],
+            ).fetchone()[0]
+        ),
+        "paper_orders": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM paper_orders WHERE account_id = ?",
+                [account_id],
+            ).fetchone()[0]
+        ),
+        "paper_positions": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM paper_positions WHERE account_id = ?",
+                [account_id],
+            ).fetchone()[0]
+        ),
+        "paper_account_transactions": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM paper_account_transactions WHERE account_id = ?",
+                [account_id],
+            ).fetchone()[0]
+        ),
+        "paper_accounts": 1,
+    }
+    for table in (
+        "paper_fills",
+        "paper_orders",
+        "paper_positions",
+        "paper_account_transactions",
+        "paper_accounts",
+    ):
+        conn.execute(f"DELETE FROM {table} WHERE account_id = ?", [account_id])
+    conn.close()
+    return {"account_id": account_id, "deleted": True, **counts}
 
 
 def update_risk_params(
@@ -484,12 +612,426 @@ def load_account_transactions(
     return [_transaction_from_row(row) for row in rows]
 
 
+def record_paper_buy(
+    *,
+    account_id: str,
+    run_id: str,
+    condition_id: str,
+    token_id: str,
+    side: str,
+    requested_notional: float,
+    fill_levels: list[tuple[float, float]],
+    p_m_yes: float,
+    p_f_yes: float,
+    side_fair_prob: float,
+    gross_edge: float,
+    net_edge: float,
+    confidence: float,
+    event_id: str = "",
+    category: str = "",
+    question: str = "",
+    forecast_run_id: str = "",
+    decision_reason: str = "",
+    fee_rate_bps: float = 0.0,
+    created_at: datetime | None = None,
+) -> PaperOrder:
+    """Record a simulated buy and aggregate it into the open position ledger.
+
+    fill_levels is a list of (price, shares) tuples already chosen by the caller
+    from visible order-book depth.
+    """
+    if side not in {"YES", "NO"}:
+        raise ValueError("side must be YES or NO")
+    _require_positive(requested_notional, "requested_notional")
+    if not fill_levels:
+        raise ValueError("fill_levels are required")
+    created_at = created_at or _now()
+    filled_notional = sum(float(price) * float(shares) for price, shares in fill_levels)
+    filled_shares = sum(float(shares) for _, shares in fill_levels)
+    _require_positive(filled_notional, "filled_notional")
+    _require_positive(filled_shares, "filled_shares")
+    fee = filled_notional * max(0.0, fee_rate_bps) / 10_000
+    cash_delta = -(filled_notional + fee)
+    avg_price = filled_notional / filled_shares
+    order_id = str(uuid4())
+
+    conn = _connect()
+    row = conn.execute("""
+        SELECT cash_balance, reserved_cash
+        FROM paper_accounts
+        WHERE account_id = ?
+    """, [account_id]).fetchone()
+    if row is None:
+        conn.close()
+        raise ValueError(f"paper account not found: {account_id}")
+    cash_before = float(row[0] or 0)
+    reserved_before = float(row[1] or 0)
+    cash_after = cash_before + cash_delta
+    if cash_after < 0:
+        conn.close()
+        raise ValueError("cash balance cannot go negative")
+
+    status = "filled" if filled_notional >= requested_notional - 0.01 else "partial"
+    order = PaperOrder(
+        order_id=order_id,
+        account_id=account_id,
+        run_id=run_id,
+        condition_id=condition_id,
+        event_id=event_id,
+        category=category,
+        question=question,
+        token_id=token_id,
+        side=side,  # type: ignore[arg-type]
+        status=status,  # type: ignore[arg-type]
+        requested_notional=_round_cash(requested_notional),
+        filled_notional=_round_cash(filled_notional),
+        filled_shares=round(filled_shares, 8),
+        avg_price=round(avg_price, 8),
+        fee=_round_cash(fee),
+        p_m_yes=p_m_yes,
+        p_f_yes=p_f_yes,
+        side_fair_prob=side_fair_prob,
+        gross_edge=gross_edge,
+        net_edge=net_edge,
+        confidence=confidence,
+        forecast_run_id=forecast_run_id,
+        decision_reason=decision_reason,
+        created_at=_as_utc(created_at),
+    )
+
+    conn.execute("""
+        UPDATE paper_accounts
+        SET cash_balance = ?, updated_at = ?
+        WHERE account_id = ?
+    """, [_round_cash(cash_after), _db_time(created_at), account_id])
+    _insert_transaction(
+        conn,
+        account_id=account_id,
+        transaction_type="trade",
+        cash_delta=cash_delta,
+        reserved_delta=0.0,
+        cash_before=cash_before,
+        cash_after=cash_after,
+        reserved_before=reserved_before,
+        reserved_after=reserved_before,
+        ref_type="paper_order",
+        ref_id=order_id,
+        memo=f"buy {side} {condition_id[:12]}",
+        created_at=created_at,
+    )
+    conn.execute("""
+        INSERT INTO paper_orders (
+            order_id, account_id, run_id, condition_id, event_id, category,
+            question, token_id, side, action, status, requested_notional,
+            filled_notional, filled_shares, avg_price, fee, p_m_yes, p_f_yes,
+            side_fair_prob, gross_edge, net_edge, confidence, forecast_run_id,
+            decision_reason, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [
+        order.order_id, order.account_id, order.run_id, order.condition_id,
+        order.event_id, order.category, order.question, order.token_id,
+        order.side, order.action, order.status, order.requested_notional,
+        order.filled_notional, order.filled_shares, order.avg_price, order.fee,
+        order.p_m_yes, order.p_f_yes, order.side_fair_prob, order.gross_edge,
+        order.net_edge, order.confidence, order.forecast_run_id,
+        order.decision_reason, _db_time(order.created_at),
+    ])
+    fills: list[PaperFill] = []
+    for price, shares in fill_levels:
+        notional = float(price) * float(shares)
+        fill_fee = fee * (notional / filled_notional) if filled_notional else 0.0
+        fill = PaperFill(
+            fill_id=str(uuid4()),
+            order_id=order_id,
+            account_id=account_id,
+            condition_id=condition_id,
+            token_id=token_id,
+            side=side,  # type: ignore[arg-type]
+            price=float(price),
+            shares=float(shares),
+            notional=_round_cash(notional),
+            fee=_round_cash(fill_fee),
+            filled_at=_as_utc(created_at),
+        )
+        fills.append(fill)
+        conn.execute("""
+            INSERT INTO paper_fills (
+                fill_id, order_id, account_id, condition_id, token_id, side,
+                price, shares, notional, fee, filled_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            fill.fill_id, fill.order_id, fill.account_id, fill.condition_id,
+            fill.token_id, fill.side, fill.price, fill.shares, fill.notional,
+            fill.fee, _db_time(fill.filled_at),
+        ])
+
+    existing = conn.execute("""
+        SELECT shares, cost_basis, fees_paid, opened_at
+        FROM paper_positions
+        WHERE account_id = ? AND condition_id = ? AND side = ?
+    """, [account_id, condition_id, side]).fetchone()
+    if existing:
+        old_shares = float(existing[0] or 0)
+        old_cost = float(existing[1] or 0)
+        old_fees = float(existing[2] or 0)
+        new_shares = old_shares + filled_shares
+        new_cost = old_cost + filled_notional
+        conn.execute("""
+            UPDATE paper_positions
+            SET token_id = ?, event_id = ?, category = ?, question = ?,
+                shares = ?, avg_price = ?, cost_basis = ?, fees_paid = ?,
+                updated_at = ?
+            WHERE account_id = ? AND condition_id = ? AND side = ?
+        """, [
+            token_id, event_id, category, question, round(new_shares, 8),
+            round(new_cost / new_shares, 8), _round_cash(new_cost),
+            _round_cash(old_fees + fee), _db_time(created_at),
+            account_id, condition_id, side,
+        ])
+    else:
+        conn.execute("""
+            INSERT INTO paper_positions (
+                account_id, condition_id, token_id, side, event_id, category,
+                question, shares, avg_price, cost_basis, fees_paid, opened_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            account_id, condition_id, token_id, side, event_id, category,
+            question, round(filled_shares, 8), round(avg_price, 8),
+            _round_cash(filled_notional), _round_cash(fee), _db_time(created_at),
+            _db_time(created_at),
+        ])
+    conn.commit()
+    conn.close()
+    return order
+
+
+def record_paper_sell(
+    *,
+    account_id: str,
+    run_id: str,
+    condition_id: str,
+    side: str,
+    shares: float,
+    price: float,
+    token_id: str = "",
+    event_id: str = "",
+    category: str = "",
+    question: str = "",
+    decision_reason: str = "",
+    fee_rate_bps: float = 0.0,
+    created_at: datetime | None = None,
+) -> PaperOrder:
+    """Record a simulated sell and reduce the open position ledger."""
+    if side not in {"YES", "NO"}:
+        raise ValueError("side must be YES or NO")
+    _require_positive(shares, "shares")
+    _require_positive(price, "price")
+    created_at = created_at or _now()
+    gross_proceeds = float(shares) * float(price)
+    fee = gross_proceeds * max(0.0, fee_rate_bps) / 10_000
+    cash_delta = gross_proceeds - fee
+    order_id = str(uuid4())
+
+    conn = _connect()
+    account_row = conn.execute("""
+        SELECT cash_balance, reserved_cash
+        FROM paper_accounts
+        WHERE account_id = ?
+    """, [account_id]).fetchone()
+    if account_row is None:
+        conn.close()
+        raise ValueError(f"paper account not found: {account_id}")
+    position_row = conn.execute("""
+        SELECT token_id, event_id, category, question, shares, avg_price,
+               cost_basis, fees_paid, opened_at
+        FROM paper_positions
+        WHERE account_id = ? AND condition_id = ? AND side = ?
+    """, [account_id, condition_id, side]).fetchone()
+    if position_row is None:
+        conn.close()
+        raise ValueError(f"paper position not found: {account_id} {condition_id} {side}")
+
+    position_shares = float(position_row[4] or 0)
+    if shares > position_shares + 1e-8:
+        conn.close()
+        raise ValueError("sell shares exceed open position")
+    position_token_id = str(position_row[0] or "")
+    token_id = token_id or position_token_id
+    event_id = event_id or str(position_row[1] or "")
+    category = category or str(position_row[2] or "")
+    question = question or str(position_row[3] or "")
+    cost_basis = float(position_row[6] or 0)
+    fees_paid = float(position_row[7] or 0)
+    cost_reduction = cost_basis * (shares / position_shares) if position_shares else 0.0
+    fee_reduction = fees_paid * (shares / position_shares) if position_shares else 0.0
+
+    cash_before = float(account_row[0] or 0)
+    reserved_before = float(account_row[1] or 0)
+    cash_after = cash_before + cash_delta
+    status = "filled" if shares >= position_shares - 1e-8 else "partial"
+    order = PaperOrder(
+        order_id=order_id,
+        account_id=account_id,
+        run_id=run_id,
+        condition_id=condition_id,
+        event_id=event_id,
+        category=category,
+        question=question,
+        token_id=token_id,
+        side=side,  # type: ignore[arg-type]
+        action="sell",
+        status=status,  # type: ignore[arg-type]
+        requested_notional=_round_cash(gross_proceeds),
+        filled_notional=_round_cash(gross_proceeds),
+        filled_shares=round(shares, 8),
+        avg_price=round(float(price), 8),
+        fee=_round_cash(fee),
+        p_m_yes=0.0,
+        p_f_yes=0.0,
+        side_fair_prob=0.0,
+        gross_edge=0.0,
+        net_edge=0.0,
+        confidence=0.0,
+        forecast_run_id="",
+        decision_reason=decision_reason,
+        created_at=_as_utc(created_at),
+    )
+
+    conn.execute("""
+        UPDATE paper_accounts
+        SET cash_balance = ?, updated_at = ?
+        WHERE account_id = ?
+    """, [_round_cash(cash_after), _db_time(created_at), account_id])
+    _insert_transaction(
+        conn,
+        account_id=account_id,
+        transaction_type="trade",
+        cash_delta=cash_delta,
+        reserved_delta=0.0,
+        cash_before=cash_before,
+        cash_after=cash_after,
+        reserved_before=reserved_before,
+        reserved_after=reserved_before,
+        ref_type="paper_order",
+        ref_id=order_id,
+        memo=f"sell {side} {condition_id[:12]}",
+        created_at=created_at,
+    )
+    conn.execute("""
+        INSERT INTO paper_orders (
+            order_id, account_id, run_id, condition_id, event_id, category,
+            question, token_id, side, action, status, requested_notional,
+            filled_notional, filled_shares, avg_price, fee, p_m_yes, p_f_yes,
+            side_fair_prob, gross_edge, net_edge, confidence, forecast_run_id,
+            decision_reason, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [
+        order.order_id, order.account_id, order.run_id, order.condition_id,
+        order.event_id, order.category, order.question, order.token_id,
+        order.side, order.action, order.status, order.requested_notional,
+        order.filled_notional, order.filled_shares, order.avg_price, order.fee,
+        order.p_m_yes, order.p_f_yes, order.side_fair_prob, order.gross_edge,
+        order.net_edge, order.confidence, order.forecast_run_id,
+        order.decision_reason, _db_time(order.created_at),
+    ])
+    fill = PaperFill(
+        fill_id=str(uuid4()),
+        order_id=order_id,
+        account_id=account_id,
+        condition_id=condition_id,
+        token_id=token_id,
+        side=side,  # type: ignore[arg-type]
+        price=float(price),
+        shares=float(shares),
+        notional=_round_cash(gross_proceeds),
+        fee=_round_cash(fee),
+        filled_at=_as_utc(created_at),
+    )
+    conn.execute("""
+        INSERT INTO paper_fills (
+            fill_id, order_id, account_id, condition_id, token_id, side,
+            price, shares, notional, fee, filled_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [
+        fill.fill_id, fill.order_id, fill.account_id, fill.condition_id,
+        fill.token_id, fill.side, fill.price, fill.shares, fill.notional,
+        fill.fee, _db_time(fill.filled_at),
+    ])
+
+    remaining_shares = position_shares - shares
+    if remaining_shares <= 1e-8:
+        conn.execute("""
+            DELETE FROM paper_positions
+            WHERE account_id = ? AND condition_id = ? AND side = ?
+        """, [account_id, condition_id, side])
+    else:
+        remaining_cost = cost_basis - cost_reduction
+        remaining_fees = fees_paid - fee_reduction
+        conn.execute("""
+            UPDATE paper_positions
+            SET shares = ?, avg_price = ?, cost_basis = ?, fees_paid = ?,
+                updated_at = ?
+            WHERE account_id = ? AND condition_id = ? AND side = ?
+        """, [
+            round(remaining_shares, 8),
+            round(remaining_cost / remaining_shares, 8),
+            _round_cash(remaining_cost),
+            _round_cash(remaining_fees),
+            _db_time(created_at),
+            account_id,
+            condition_id,
+            side,
+        ])
+    conn.commit()
+    conn.close()
+    return order
+
+
+def load_paper_orders(account_id: str = DEFAULT_ACCOUNT_ID, limit: int = 50) -> list[PaperOrder]:
+    conn = _connect()
+    rows = conn.execute("""
+        SELECT order_id, account_id, run_id, condition_id, event_id, category,
+               question, token_id, side, action, status, requested_notional,
+               filled_notional, filled_shares, avg_price, fee, p_m_yes, p_f_yes,
+               side_fair_prob, gross_edge, net_edge, confidence, forecast_run_id,
+               decision_reason, created_at
+        FROM paper_orders
+        WHERE account_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+    """, [account_id, limit]).fetchall()
+    conn.close()
+    return [_order_from_row(row) for row in rows]
+
+
+def load_paper_positions(account_id: str = DEFAULT_ACCOUNT_ID) -> list[PaperPosition]:
+    conn = _connect()
+    rows = conn.execute("""
+        SELECT account_id, condition_id, token_id, side, event_id, category,
+               question, shares, avg_price, cost_basis, fees_paid, opened_at,
+               updated_at
+        FROM paper_positions
+        WHERE account_id = ?
+        ORDER BY updated_at DESC
+    """, [account_id]).fetchall()
+    conn.close()
+    return [_position_from_row(row) for row in rows]
+
+
 def account_summary() -> dict:
     conn = _connect()
     accounts = conn.execute("SELECT COUNT(*) FROM paper_accounts").fetchone()[0]
     transactions = conn.execute(
         "SELECT COUNT(*) FROM paper_account_transactions"
     ).fetchone()[0]
+    orders = conn.execute("SELECT COUNT(*) FROM paper_orders").fetchone()[0]
+    positions = conn.execute("SELECT COUNT(*) FROM paper_positions").fetchone()[0]
     cash = conn.execute(
         "SELECT COALESCE(SUM(cash_balance), 0), COALESCE(SUM(reserved_cash), 0) "
         "FROM paper_accounts"
@@ -498,6 +1040,8 @@ def account_summary() -> dict:
     return {
         "paper_accounts": accounts,
         "paper_account_transactions": transactions,
+        "paper_orders": orders,
+        "paper_positions": positions,
         "total_cash_balance": float(cash[0] or 0),
         "total_reserved_cash": float(cash[1] or 0),
     }
@@ -658,6 +1202,54 @@ def _transaction_from_row(row) -> PaperAccountTransaction:
         ref_id=row[10] or "",
         memo=row[11] or "",
         created_at=_as_utc(row[12]),
+    )
+
+
+def _order_from_row(row) -> PaperOrder:
+    return PaperOrder(
+        order_id=row[0],
+        account_id=row[1],
+        run_id=row[2],
+        condition_id=row[3],
+        event_id=row[4] or "",
+        category=row[5] or "",
+        question=row[6] or "",
+        token_id=row[7],
+        side=row[8],
+        action=row[9],
+        status=row[10],
+        requested_notional=float(row[11] or 0),
+        filled_notional=float(row[12] or 0),
+        filled_shares=float(row[13] or 0),
+        avg_price=float(row[14] or 0),
+        fee=float(row[15] or 0),
+        p_m_yes=float(row[16] or 0),
+        p_f_yes=float(row[17] or 0),
+        side_fair_prob=float(row[18] or 0),
+        gross_edge=float(row[19] or 0),
+        net_edge=float(row[20] or 0),
+        confidence=float(row[21] or 0),
+        forecast_run_id=row[22] or "",
+        decision_reason=row[23] or "",
+        created_at=_as_utc(row[24]),
+    )
+
+
+def _position_from_row(row) -> PaperPosition:
+    return PaperPosition(
+        account_id=row[0],
+        condition_id=row[1],
+        token_id=row[2],
+        side=row[3],
+        event_id=row[4] or "",
+        category=row[5] or "",
+        question=row[6] or "",
+        shares=float(row[7] or 0),
+        avg_price=float(row[8] or 0),
+        cost_basis=float(row[9] or 0),
+        fees_paid=float(row[10] or 0),
+        opened_at=_as_utc(row[11]),
+        updated_at=_as_utc(row[12]),
     )
 
 

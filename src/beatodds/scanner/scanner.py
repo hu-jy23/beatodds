@@ -16,8 +16,9 @@ from beatodds.data.gamma_client import GammaClient
 
 
 class Scanner:
-    def __init__(self):
+    def __init__(self, market_limit: int | None = None):
         self.cfg = get_settings()
+        self.market_limit = market_limit or self.cfg.scanner_market_limit
 
     def scan(self) -> list[CandidateMarket]:
         """Pull active markets, take price snapshots, return filtered candidates."""
@@ -26,8 +27,9 @@ class Scanner:
 
         with GammaClient() as gamma:
             raw_dicts = gamma.get_liquid_markets(
-                limit=500,
+                limit=self.market_limit,
                 min_volume_24h=self.cfg.scanner_min_volume_24h,
+                page_limit=self.cfg.scanner_gamma_page_limit,
             )
             raw_markets: list[MarketMeta] = []
             for raw in raw_dicts:

@@ -42,6 +42,8 @@ def _is_sports(question: str, category: str) -> bool:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--top", type=int, default=5, help="Number of markets to forecast")
+    parser.add_argument("--scan-limit", type=int,
+                        help="Number of liquid Gamma markets to scan before forecast filters")
     parser.add_argument("--dry-run", action="store_true",
                         help="Scan and parse only; skips Tavily retrieval and final forecasting")
     parser.add_argument("--backtest", action="store_true",
@@ -52,10 +54,12 @@ def main():
                         help="Minimum market midpoint probability (default 0 = no filter)")
     parser.add_argument("--max-prob", type=float, default=1.0,
                         help="Maximum market midpoint probability (default 1 = no filter)")
+    parser.add_argument("--china-info", action="store_true",
+                        help="Enable China-specific query expansion and source routing")
     args = parser.parse_args()
 
     # --- Scan ---
-    scanner = Scanner()
+    scanner = Scanner(market_limit=args.scan_limit)
     candidates = scanner.scan()
     # Filter to tradeable (tight spread) markets for forecasting
     tradeable = [c for c in candidates if c.snapshot.spread < 0.05]
@@ -91,6 +95,11 @@ def main():
         features_map[c.market.condition_id] = f
         logger.info(f"Parsed: {c.market.question[:50]}")
         logger.info(f"  queries: {f.search_queries[:2]}")
+        if args.china_info:
+            logger.info(
+                f"  china={f.china_relevance} event_type={f.event_type} "
+                f"routes={f.source_routing_hints[:3]}"
+            )
 
     if args.dry_run:
         print("\n[dry-run] Stopping before evidence retrieval.")
@@ -108,7 +117,11 @@ def main():
     for c in targets:
         features = features_map[c.market.condition_id]
 
-        evidence, frozen_at = retriever.retrieve(c, features)
+        evidence, frozen_at = retriever.retrieve(
+            c,
+            features,
+            enable_china_info=args.china_info,
+        )
         forecast = forecaster.forecast(c, evidence, frozen_at)
 
         p_m = c.snapshot.midpoint
@@ -126,7 +139,7 @@ def main():
             p_m=p_m,
             p_f=forecast.p_f,
             evidence_frozen_at=frozen_at,
-            signal_type="evidence",
+            signal_type="china_enhanced" if args.china_info else "evidence",
             model_version=forecast.model,
         ))
 

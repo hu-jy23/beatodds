@@ -26,6 +26,7 @@ from beatodds.evaluation.workflow_store import (
 
 def _reset_settings(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("WORKFLOW_RECORDS_DIR", str(tmp_path / "workflow_records"))
     config_module._settings = None
 
 
@@ -67,8 +68,13 @@ def _features(condition_id: str) -> ResolutionFeatures:
     return ResolutionFeatures(
         condition_id=condition_id,
         condition_type="event_occurrence",
+        event_type="diplomacy_trade",
+        china_relevance="high",
         key_entities=["Workflow Store"],
         search_queries=["workflow store test evidence"],
+        geography=["China"],
+        resolution_source_hint="Ministry of Commerce",
+        source_routing_hints=["mofcom.gov.cn"],
         has_explicit_deadline=True,
         deadline_date=datetime(2026, 6, 1, tzinfo=timezone.utc),
         oracle_type="UMA",
@@ -88,7 +94,16 @@ def _evidence() -> list[EvidenceItem]:
             url="https://example.com/workflow",
             source="example.com",
             published_at=datetime(2026, 5, 25, 9, 30, tzinfo=timezone.utc),
+            retrieved_at=datetime(2026, 5, 25, 10, 2, tzinfo=timezone.utc),
             relevance_score=0.9,
+            provider="mock",
+            source_type="central_official",
+            direction="neutral",
+            strength=0.2,
+            resolution_relevance=0.7,
+            reliability_prior=0.9,
+            dedupe_key="https://example.com/workflow",
+            raw_metadata={"route": "china_site_query"},
         )
     ]
 
@@ -160,11 +175,25 @@ def test_workflow_store_forecast_evidence_and_resolution(tmp_path, monkeypatch) 
     loaded_features = load_resolution_features(candidate.market.condition_id)
     assert loaded_features is not None
     assert loaded_features.search_queries == features.search_queries
+    assert loaded_features.event_type == "diplomacy_trade"
+    assert loaded_features.china_relevance == "high"
+    assert loaded_features.source_routing_hints == ["mofcom.gov.cn"]
 
     loaded_evidence = load_evidence_for_run(run_id)
     assert len(loaded_evidence) == 1
     assert loaded_evidence[0].query == evidence[0].query
     assert loaded_evidence[0].url == evidence[0].url
+    assert loaded_evidence[0].provider == "mock"
+    assert loaded_evidence[0].source_type == "central_official"
+    assert loaded_evidence[0].raw_metadata == {"route": "china_site_query"}
+
+    record_dir = tmp_path / "workflow_records"
+    json_records = list(record_dir.glob(f"*{run_id[:8]}*.json"))
+    md_records = list(record_dir.glob(f"*{run_id[:8]}*.md"))
+    assert len(json_records) == 1
+    assert len(md_records) == 1
+    assert run_id in json_records[0].read_text(encoding="utf-8")
+    assert "Workflow store evidence" in md_records[0].read_text(encoding="utf-8")
 
     assert mark_outcome(candidate.market.condition_id, 1.0, source="manual") == 1
     assert workflow_summary()["outcomes"] == 1
